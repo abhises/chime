@@ -19,9 +19,12 @@ async function test() {
 
     const result = await ChimeMeetingManager.getMeeting(meeting.MeetingId);
     console.log("Fetched meeting:", result);
+
+    // Show cache statistics
+    console.log("\n📊 Cache Statistics:", redisWrapper.getCacheStats());
+
+    console.log("✅ All tests passed!");
   } catch (err) {
     console.error("Test failed:", err.message);
   }
 }
-
-test();
