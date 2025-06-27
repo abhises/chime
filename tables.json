@@ -8,21 +8,113 @@
       "name": { "type": "S", "description": "Product name" },
       "description": { "type": "S", "description": "Product description" },
       "price": { "type": "N", "description": "Product price" },
-      "currency": { "type": "S", "description": "Price currency (USD, EUR, etc.)" },
+      "currency": {
+        "type": "S",
+        "description": "Price currency (USD, EUR, etc.)"
+      },
       "stock": { "type": "N", "description": "Available stock quantity" },
       "sku": { "type": "S", "description": "Stock keeping unit" },
       "brand": { "type": "S", "description": "Product brand" },
       "images": { "type": "S", "description": "Comma-separated image URLs" },
       "tags": { "type": "S", "description": "Comma-separated tags" },
       "weight": { "type": "N", "description": "Product weight in grams" },
-      "dimensions": { "type": "S", "description": "Product dimensions (LxWxH)" },
-      "isActive": { "type": "BOOL", "description": "Whether product is active" },
-      "isFeatured": { "type": "BOOL", "description": "Whether product is featured" },
+      "dimensions": {
+        "type": "S",
+        "description": "Product dimensions (LxWxH)"
+      },
+      "isActive": {
+        "type": "BOOL",
+        "description": "Whether product is active"
+      },
+      "isFeatured": {
+        "type": "BOOL",
+        "description": "Whether product is featured"
+      },
       "rating": { "type": "N", "description": "Average product rating" },
       "reviewCount": { "type": "N", "description": "Number of reviews" },
       "createdAt": { "type": "N", "description": "Product creation timestamp" },
       "updatedAt": { "type": "N", "description": "Last update timestamp" },
       "metadata": { "type": "S", "description": "Additional JSON metadata" }
+    }
+  },
+  "MeetingMeetings": {
+    "PK": "MeetingId",
+    "columns": {
+      "MeetingId": { "type": "S", "description": "Unique meeting identifier" },
+      "Title": { "type": "S", "description": "Meeting title" },
+      "CreatedAt": { "type": "S", "description": "Meeting creation timestamp" },
+      "CreatorUserId": {
+        "type": "S",
+        "description": "User ID of meeting creator"
+      },
+      "IsOpen": { "type": "BOOL", "description": "Whether meeting is open" },
+      "MeetingPIN": { "type": "S", "description": "Meeting PIN" },
+      "MeetingType": { "type": "S", "description": "Type of meeting" },
+      "ScheduledAt": { "type": "S", "description": "Scheduled meeting time" },
+      "BookingId": { "type": "S", "description": "Linked booking ID" },
+      "ChatEnabled": {
+        "type": "BOOL",
+        "description": "Whether chat is enabled"
+      },
+      "RecordingEnabled": {
+        "type": "BOOL",
+        "description": "Whether recording is enabled"
+      },
+      "BlockedAttendeeIds": {
+        "type": "L",
+        "description": "List of blocked attendee IDs"
+      },
+      "Revenue": { "type": "L", "description": "Revenue entries" },
+      "RecordingS3Url": { "type": "S", "description": "S3 URL for recording" }
+    }
+  },
+  "MeetingAttendees": {
+    "PK": "MeetingId",
+    "SK": "AttendeeId",
+    "columns": {
+      "MeetingId": { "type": "S", "description": "Meeting identifier" },
+      "AttendeeId": { "type": "S", "description": "Attendee identifier" },
+      "UserId": { "type": "S", "description": "User identifier" },
+      "IsModerator": {
+        "type": "BOOL",
+        "description": "Whether user is moderator"
+      },
+      "JoinedAt": { "type": "S", "description": "Join timestamp" },
+      "LeftAt": { "type": "S", "description": "Leave timestamp" }
+    }
+  },
+  "MeetingFeedback": {
+    "PK": "MeetingId",
+    "SK": "UserId",
+    "columns": {
+      "MeetingId": { "type": "S", "description": "Meeting identifier" },
+      "UserId": { "type": "S", "description": "User identifier" },
+      "SubmittedAt": {
+        "type": "S",
+        "description": "Feedback submission timestamp"
+      },
+      "Score": { "type": "N", "description": "Feedback score" },
+      "Feedback": { "type": "S", "description": "Feedback text" },
+      "PrivateComment": { "type": "S", "description": "Private comment" },
+      "Rating": { "type": "N", "description": "Rating value" }
+    }
+  },
+  "MeetingJoinLogs": {
+    "PK": "UserId",
+    "SK": "JoinTimestamp",
+    "columns": {
+      "UserId": { "type": "S", "description": "User identifier" },
+      "MeetingId": { "type": "S", "description": "Meeting identifier" },
+      "JoinTimestamp": { "type": "S", "description": "Join/leave timestamp" },
+      "EventType": { "type": "S", "description": "Event type (join/leave)" }
+    }
+  },
+  "UserSettings": {
+    "PK": "UserId",
+    "columns": {
+      "UserId": { "type": "S", "description": "User identifier" },
+      "Ringtone": { "type": "S", "description": "User ringtone preference" },
+      "AvatarUrl": { "type": "S", "description": "User avatar URL" }
     }
   }
 }

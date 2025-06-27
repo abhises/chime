@@ -1,9 +1,15 @@
 import ChimeMeetingManager from "./chime/chimeMeetingManager.js";
+import ScyllaDb from "./ScyllaDb.js";
 import dotenv from "dotenv";
 dotenv.config();
 
 async function test() {
   try {
+    console.log("Loading table configurations...");
+    await ScyllaDb.loadTableConfigs("./tables.json");
+    console.log("✅ Table configurations loaded successfully");
+
+    console.log("Testing ChimeMeetingManager...");
     const meeting = await ChimeMeetingManager.createMeeting({
       title: "Team Sync",
       creatorUserId: "user-123",
@@ -19,12 +25,9 @@ async function test() {
 
     const result = await ChimeMeetingManager.getMeeting(meeting.MeetingId);
     console.log("Fetched meeting:", result);
-
-    // Show cache statistics
-    console.log("\n📊 Cache Statistics:", redisWrapper.getCacheStats());
-
-    console.log("✅ All tests passed!");
   } catch (err) {
     console.error("Test failed:", err.message);
   }
 }
+
+test();

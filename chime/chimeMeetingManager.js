@@ -8,6 +8,7 @@ import {
 import crypto from "crypto";
 import dotenv from "dotenv";
 import ScyllaDb from "../ScyllaDb.js";
+import redis from "../redis/redisWrapper.js";
 
 dotenv.config();
 const chime = new ChimeSDKMeetingsClient({
@@ -17,7 +18,6 @@ const chime = new ChimeSDKMeetingsClient({
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   },
 });
-// const redis = process.env.REDIS_URL ? new Redis(process.env.REDIS_URL) : null;
 
 // Constants
 const MAX_ATTENDEES = 250;
