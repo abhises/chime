@@ -1,58 +1,344 @@
-import ChimeMeetingManager from "./chime/chimeMeetingManager.js";
+import {
+  ChimeSDKMeetingsClient,
+  CreateMeetingCommand,
+  CreateAttendeeCommand,
+  DeleteAttendeeCommand,
+  DeleteMeetingCommand,
+} from "@aws-sdk/client-chime-sdk-meetings";
+import crypto from "crypto";
 import ScyllaDb from "./ScyllaDb.js";
-import dotenv from "dotenv";
-dotenv.config();
+import Redis from "ioredis";
 
-// Test utilities
-function logTest(testName) {
-  console.log(`\n🧪 Testing ${testName}...`);
+// Clients
+const chime = new ChimeSDKMeetingsClient({ region: process.env.AWS_REGION });
+const redis = process.env.REDIS_URL ? new Redis(process.env.REDIS_URL) : null;
+
+// Constants
+const MAX_ATTENDEES = 250;
+const MEETINGS_TABLE = "MeetingMeetings";
+const ATTENDEES_TABLE = "MeetingAttendees";
+const FEEDBACK_TABLE = "MeetingFeedback";
+const JOIN_LOGS_TABLE = "MeetingJoinLogs";
+const USER_SETTINGS_TABLE = "UserSettings";
+
+function logEvent(event, data = {}) {
+  console.log(
+    `[${new Date().toISOString()}] EVENT: ${event}`,
+    JSON.stringify(data)
+  );
 }
 
-function logSuccess(message) {
-  console.log(`✅ ${message}`);
+function logError(error, context = {}) {
+  console.error(`[${new Date().toISOString()}] ERROR: ${error.message}`, {
+    stack: error.stack,
+    ...context,
+  });
 }
 
-function logError(message, error) {
-  console.error(`❌ ${message}:`, error.message);
-}
+export default class ChimeMeetingManager {
+  static async createMeeting({
+    title,
+    type = "private_audio",
+    isOpen = true,
+    creatorUserId,
+    defaultPIN = null,
+    scheduledAt = null,
+    linkedBookingId = null,
+    chatEnabled = true,
+    recordingEnabled = false,
+  }) {
+    try {
+      const clientRequestToken = crypto.randomUUID();
+      const resp = await chime.send(
+        new CreateMeetingCommand({
+          ClientRequestToken: clientRequestToken,
+          MediaRegion: process.env.AWS_REGION,
+        })
+      );
+      const meetingId = resp?.Meeting?.MeetingId;
+      if (!meetingId) throw new Error("Chime SDK failed to create meeting");
 
-// Global test data
-let testMeetingId = null;
-let testAttendeeId = null;
-const testUserId = "test-user-123";
-const testCreatorId = "creator-user-456";
+      const item = {
+        MeetingId: meetingId,
+        Title: title,
+        CreatedAt: new Date().toISOString(),
+        CreatorUserId: creatorUserId,
+        IsOpen: isOpen,
+        MeetingPIN: defaultPIN,
+        MeetingType: type,
+        ScheduledAt: scheduledAt,
+        BookingId: linkedBookingId,
+        ChatEnabled: chatEnabled,
+        RecordingEnabled: recordingEnabled,
+        BlockedAttendeeIds: [],
+        Revenue: [],
+        RecordingS3Url: null,
+      };
 
-async function runAllTests() {
-  try {
-    console.log("🚀 Starting ChimeMeetingManager Test Suite");
-    console.log("Loading table configurations...");
-    await ScyllaDb.loadTableConfigs("./tables.json");
-    logSuccess("Table configurations loaded successfully");
+      await ScyllaDb.putItem(MEETINGS_TABLE, item);
+      logEvent("createMeeting", item);
+      return item;
+    } catch (err) {
+      logError(err, { method: "createMeeting" });
+      throw err;
+    }
+  }
 
-    // Run all tests
-    await testCreateMeeting();
-    await testGetMeeting();
-    await testCanJoinMeeting();
-    await testAddAttendee();
-    await testUserJoinedMeeting();
-    await testUserLeftMeeting();
-    await testBlockAttendee();
-    await testDeleteAttendee();
-    await testSubmitFeedback();
-    await testUpdateRevenue();
-    await testGetUserRingtone();
-    await testGetUserMeetingAvatar();
-    await testGetDefaultAvatars();
-    await testNotifyMeetingStarted();
+  static async getMeeting(meetingId) {
+    try {
+      if (redis) {
+        const cached = await redis.get(`meeting:${meetingId}`);
+        if (cached) return JSON.parse(cached);
+      }
 
-    console.log("\n🎉 All tests completed!");
-  } catch (error) {
-    logError("Test suite failed", error);
+      const item = await ScyllaDb.getItem(MEETINGS_TABLE, {
+        MeetingId: meetingId,
+      });
+      if (redis && item)
+        await redis.set(`meeting:${meetingId}`, JSON.stringify(item), "EX", 60);
+      logEvent("getMeeting", { meetingId });
+      return item;
+    } catch (err) {
+      logError(err, { method: "getMeeting", meetingId });
+      throw err;
+    }
+  }
+
+  static async canJoinMeeting(meetingId, userId) {
+    try {
+      const meeting = await this.getMeeting(meetingId);
+      if (!meeting) throw new Error("Meeting does not exist");
+
+      if (meeting.BlockedAttendeeIds.includes(userId)) {
+        throw new Error("Permission Denied – user blocked from joining");
+      }
+
+      const attendees = await ScyllaDb.query(
+        ATTENDEES_TABLE,
+        "MeetingId = :m",
+        { ":m": meetingId }
+      );
+      if (
+        attendees.find((a) => a.UserId === userId && a.LeftAt === undefined)
+      ) {
+        throw new Error("User already joined");
+      }
+
+      return attendees.length < MAX_ATTENDEES;
+    } catch (err) {
+      logError(err, { method: "canJoinMeeting", meetingId, userId });
+      throw err;
+    }
+  }
+
+  static async addAttendee(meetingId, userId, isModerator = false) {
+    try {
+      const allowed = await this.canJoinMeeting(meetingId, userId);
+      if (!allowed) throw new Error("User not allowed to join");
+
+      const resp = await chime.send(
+        new CreateAttendeeCommand({
+          MeetingId: meetingId,
+          ExternalUserId: userId,
+        })
+      );
+
+      const attendeeId = resp.Attendee.AttendeeId;
+      const record = {
+        MeetingId: meetingId,
+        AttendeeId: attendeeId,
+        UserId: userId,
+        IsModerator: isModerator,
+        JoinedAt: new Date().toISOString(),
+      };
+
+      await ScyllaDb.putItem(ATTENDEES_TABLE, record);
+      logEvent("addAttendee", record);
+      return record;
+    } catch (err) {
+      logError(err, { method: "addAttendee", meetingId, userId });
+      throw err;
+    }
+  }
+
+  static async deleteAttendee(meetingId, attendeeId) {
+    try {
+      await chime.send(
+        new DeleteAttendeeCommand({
+          MeetingId: meetingId,
+          AttendeeId: attendeeId,
+        })
+      );
+      await ScyllaDb.deleteItem(ATTENDEES_TABLE, {
+        MeetingId: meetingId,
+        AttendeeId,
+      });
+      logEvent("deleteAttendee", { meetingId, attendeeId });
+    } catch (err) {
+      logError(err, { method: "deleteAttendee", meetingId, attendeeId });
+      throw err;
+    }
+  }
+
+  static async blockAttendee(meetingId, userId) {
+    try {
+      const meeting = await this.getMeeting(meetingId);
+      const blocked = new Set(meeting.BlockedAttendeeIds || []);
+      blocked.add(userId);
+
+      // Add custom system-level block as needed here
+      await ScyllaDb.updateItem(
+        MEETINGS_TABLE,
+        { MeetingId: meetingId },
+        {
+          BlockedAttendeeIds: Array.from(blocked),
+        }
+      );
+      logEvent("blockAttendee", { meetingId, userId });
+    } catch (err) {
+      logError(err, { method: "blockAttendee", meetingId, userId });
+      throw err;
+    }
+  }
+
+  static async userJoinedMeeting(meetingId, attendeeId, userId) {
+    const joinedAt = new Date().toISOString();
+    await ScyllaDb.updateItem(
+      ATTENDEES_TABLE,
+      { MeetingId: meetingId, AttendeeId: attendeeId },
+      { JoinedAt: joinedAt }
+    );
+    await ScyllaDb.putItem(JOIN_LOGS_TABLE, {
+      UserId: userId,
+      MeetingId: meetingId,
+      JoinTimestamp: joinedAt,
+      EventType: "join",
+    });
+    logEvent("userJoinedMeeting", { meetingId, userId, attendeeId });
+  }
+
+  static async userLeftMeeting(meetingId, attendeeId, userId) {
+    const leftAt = new Date().toISOString();
+    await ScyllaDb.updateItem(
+      ATTENDEES_TABLE,
+      { MeetingId: meetingId, AttendeeId: attendeeId },
+      { LeftAt: leftAt }
+    );
+    await ScyllaDb.putItem(JOIN_LOGS_TABLE, {
+      UserId: userId,
+      MeetingId: meetingId,
+      JoinTimestamp: leftAt,
+      EventType: "leave",
+    });
+    logEvent("userLeftMeeting", { meetingId, userId, attendeeId });
+  }
+
+  static async submitFeedback({
+    meetingId,
+    userId,
+    score,
+    feedback,
+    commentToSession,
+    rating,
+  }) {
+    const record = {
+      MeetingId: meetingId,
+      UserId: userId,
+      SubmittedAt: new Date().toISOString(),
+      Score: score,
+      Feedback: feedback,
+      PrivateComment: commentToSession,
+      Rating: rating,
+    };
+    await ScyllaDb.putItem(FEEDBACK_TABLE, record);
+    logEvent("submitFeedback", record);
+  }
+
+  static async updateRevenue(meetingId, revenueEntry) {
+    const meeting = await this.getMeeting(meetingId);
+    const updatedRevenue = [...(meeting.Revenue || []), revenueEntry];
+    await ScyllaDb.updateItem(
+      MEETINGS_TABLE,
+      { MeetingId: meetingId },
+      {
+        Revenue: updatedRevenue,
+      }
+    );
+    logEvent("updateRevenue", { meetingId, revenueEntry });
+  }
+
+  static async getRecording(meetingId) {
+    const meeting = await this.getMeeting(meetingId);
+    return meeting?.RecordingS3Url || null;
+  }
+
+  static async hasRecording(meetingId) {
+    const url = await this.getRecording(meetingId);
+    return !!url;
+  }
+
+  static async getUserRingtone(userId) {
+    const user = await ScyllaDb.getItem(USER_SETTINGS_TABLE, {
+      UserId: userId,
+    });
+    return user?.Ringtone || "default";
+  }
+
+  static async getUserMeetingAvatar(userId) {
+    const user = await ScyllaDb.getItem(USER_SETTINGS_TABLE, {
+      UserId: userId,
+    });
+    return user?.AvatarUrl || null;
+  }
+
+  static async getDefaultAvatars() {
+    return [
+      "https://cdn.example.com/avatars/1.png",
+      "https://cdn.example.com/avatars/2.png",
+      "https://cdn.example.com/avatars/3.png",
+    ];
+  }
+
+  static async notifyMeetingStarted(meetingId) {
+    // Implement SNS, WebSocket or Email notification
+    logEvent("notifyMeetingStarted", { meetingId });
+  }
+
+  // Placeholders – chat handled externally
+  static async createChannel() {
+    logEvent("createChannel", { using: "custom-chat-system" });
+    return null;
+  }
+
+  static async deleteChannel() {
+    logEvent("deleteChannel", { using: "custom-chat-system" });
+    return null;
   }
 }
 
+// ✅ Minimal .env.local (for local/Replit)
+// env
+// Copy
+// Edit
+// APP_ENVIRONMENT=dev
+// AWS_REGION=us-east-1
+// AWS_ACCESS_KEY_ID=your-local-access-key
+// AWS_SECRET_ACCESS_KEY=your-local-secret-key
+// REDIS_URL=redis://localhost:6379
+
+// ✅ Minimal .env.prod (for AWS/Lambda/EC2)
+// APP_ENVIRONMENT=prod
+// AWS_REGION=us-east-1
+// REDIS_URL=redis://your-prod-redis:6379
+// ✅ No AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY in prod — AWS IAM role handles it.
+
+// Testing Code
+import ChimeMeetingManager from "./ChimeMeetingManager.js";
+
 async function testCreateMeeting() {
-  logTest("createMeeting");
+  console.log("\n==== TEST: createMeeting ====\n");
+
+  // 1. ✅ Basic meeting
   try {
     const res = await ChimeMeetingManager.createMeeting({
       title: "Basic Audio",
@@ -63,6 +349,7 @@ async function testCreateMeeting() {
     console.error("❌ Failed basic meeting:", e.message);
   }
 
+  // 2. ✅ Video meeting with recording
   try {
     const res = await ChimeMeetingManager.createMeeting({
       title: "Video Call",
@@ -74,6 +361,8 @@ async function testCreateMeeting() {
   } catch (e) {
     console.error("❌ Failed video:", e.message);
   }
+
+  // 3. ✅ Scheduled with PIN and booking
   try {
     const res = await ChimeMeetingManager.createMeeting({
       title: "Scheduled",
@@ -86,6 +375,8 @@ async function testCreateMeeting() {
   } catch (e) {
     console.error("❌ Scheduled failed:", e.message);
   }
+
+  // 4. ✅ Group audio
   try {
     const res = await ChimeMeetingManager.createMeeting({
       title: "Group Audio",
@@ -97,6 +388,7 @@ async function testCreateMeeting() {
     console.error("❌ Group audio failed:", e.message);
   }
 
+  // 5. ❌ Missing title
   try {
     const res = await ChimeMeetingManager.createMeeting({
       creatorUserId: "user005",
@@ -106,6 +398,7 @@ async function testCreateMeeting() {
     console.log("✅ Expected fail (no title):", e.message);
   }
 
+  // 6. ❌ Missing creatorUserId
   try {
     const res = await ChimeMeetingManager.createMeeting({
       title: "No Creator",
@@ -115,6 +408,7 @@ async function testCreateMeeting() {
     console.log("✅ Expected fail (no creatorUserId):", e.message);
   }
 
+  // 7. ✅ Chat disabled
   try {
     const res = await ChimeMeetingManager.createMeeting({
       title: "No Chat",
@@ -169,49 +463,13 @@ async function testCreateMeeting() {
   } catch (e) {
     console.error("❌ Full meta failed:", e.message);
   }
-
-  // try {
-  //   // Test 1: Basic meeting creation
-  //   const meeting1 = await ChimeMeetingManager.createMeeting({
-  //     title: "Test Meeting 1",
-  //     creatorUserId: testCreatorId,
-  //   });
-
-  //   testMeetingId = meeting1.MeetingId; // Store for other tests
-  //   logSuccess(`Created basic meeting: ${meeting1.MeetingId}`);
-
-  //   // Test 2: Meeting with all options
-  //   const meeting2 = await ChimeMeetingManager.createMeeting({
-  //     title: "Advanced Test Meeting",
-  //     type: "public_video",
-  //     isOpen: false,
-  //     creatorUserId: testCreatorId,
-  //     defaultPIN: "1234",
-  //     scheduledAt: new Date(Date.now() + 3600000).toISOString(),
-  //     linkedBookingId: "booking-123",
-  //     chatEnabled: false,
-  //     recordingEnabled: true,
-  //   });
-
-  //   logSuccess(`Created advanced meeting: ${meeting2.MeetingId}`);
-
-  //   // Test 3: Error case - missing title
-  //   try {
-  //     await ChimeMeetingManager.createMeeting({
-  //       creatorUserId: testCreatorId,
-  //     });
-  //     logError("Should have failed without title", new Error("Expected error"));
-  //   } catch (error) {
-  //     logSuccess("Correctly failed without title");
-  //   }
-  // } catch (error) {
-  //   logError("createMeeting test failed", error);
-  // }
 }
 
-async function testGetMeeting() {
-  logTest("getMeeting");
+testCreateMeeting();
 
+import ChimeMeetingManager from "./ChimeMeetingManager.js";
+
+async function testGetMeeting() {
   console.log("\n==== TEST: getMeeting ====\n");
 
   // 1. ✅ Valid meetingId from DB (not cached)
@@ -305,9 +563,11 @@ async function testGetMeeting() {
   }
 }
 
-async function testCanJoinMeeting() {
-  logTest("canJoinMeeting");
+testGetMeeting();
 
+import ChimeMeetingManager from "./ChimeMeetingManager.js";
+
+async function testCanJoinMeeting() {
   console.log("\n==== TEST: canJoinMeeting ====\n");
 
   // 1. ✅ Valid meeting + user
@@ -366,7 +626,7 @@ async function testCanJoinMeeting() {
       title: "Overload",
       creatorUserId: "creator02",
     });
-    for (let i = 0; i < 25; i++) {
+    for (let i = 0; i < 250; i++) {
       await ChimeMeetingManager.addAttendee(
         meeting.MeetingId,
         `auto-user-${i}`
@@ -439,9 +699,11 @@ async function testCanJoinMeeting() {
   }
 }
 
-async function testAddAttendee() {
-  logTest("addAttendee");
+testCanJoinMeeting();
 
+import ChimeMeetingManager from "./ChimeMeetingManager.js";
+
+async function testAddAttendee() {
   console.log("\n==== TEST: addAttendee ====\n");
 
   // 1. ✅ Normal attendee add
@@ -515,7 +777,7 @@ async function testAddAttendee() {
       title: "Overflow",
       creatorUserId: "hostOver",
     });
-    for (let i = 0; i < 25; i++) {
+    for (let i = 0; i < 250; i++) {
       await ChimeMeetingManager.addAttendee(meeting.MeetingId, `user-${i}`);
     }
     await ChimeMeetingManager.addAttendee(meeting.MeetingId, "extraUser");
@@ -575,6 +837,11 @@ async function testAddAttendee() {
     process.env.REDIS_URL = "redis://localhost:6379";
   }
 }
+
+testAddAttendee();
+
+import ChimeMeetingManager from "./ChimeMeetingManager.js";
+
 async function testDeleteAttendee() {
   console.log("\n==== TEST: deleteAttendee ====\n");
 
@@ -733,6 +1000,10 @@ async function testDeleteAttendee() {
   }
 }
 
+testDeleteAttendee();
+
+import ChimeMeetingManager from "./ChimeMeetingManager.js";
+
 async function testBlockAttendee() {
   console.log("\n==== TEST: blockAttendee ====\n");
 
@@ -865,6 +1136,10 @@ async function testBlockAttendee() {
     console.log("✅ Block logic consistent:", e.message);
   }
 }
+
+testBlockAttendee();
+
+import ChimeMeetingManager from "./ChimeMeetingManager.js";
 
 async function testUserJoinedMeeting() {
   console.log("\n==== TEST: userJoinedMeeting ====\n");
@@ -1033,6 +1308,10 @@ async function testUserJoinedMeeting() {
     console.error("❌ Failed to create log entry:", e.message);
   }
 }
+
+testUserJoinedMeeting();
+
+import ChimeMeetingManager from "./ChimeMeetingManager.js";
 
 async function testUserLeftMeeting() {
   console.log("\n==== TEST: userLeftMeeting ====\n");
@@ -1223,9 +1502,11 @@ async function testUserLeftMeeting() {
   }
 }
 
-async function testSubmitFeedback() {
-  logTest("submitFeedback");
+testUserLeftMeeting();
 
+import ChimeMeetingManager from "./ChimeMeetingManager.js";
+
+async function testSubmitFeedback() {
   console.log("\n==== TEST: submitFeedback ====\n");
 
   // 1. ✅ Submit valid feedback with all fields
@@ -1430,6 +1711,10 @@ async function testSubmitFeedback() {
   }
 }
 
+testSubmitFeedback();
+
+import ChimeMeetingManager from "./ChimeMeetingManager.js";
+
 async function testUpdateRevenue() {
   console.log("\n==== TEST: updateRevenue ====\n");
 
@@ -1609,6 +1894,11 @@ async function testUpdateRevenue() {
   }
 }
 
+testUpdateRevenue();
+
+import ChimeMeetingManager from "./ChimeMeetingManager.js";
+import ScyllaDb from "./ScyllaDb.js";
+
 async function testGetUserRingtone() {
   console.log("\n==== TEST: getUserRingtone ====\n");
 
@@ -1759,6 +2049,12 @@ async function testGetUserRingtone() {
     console.error("❌ Long ringtone test failed:", e.message);
   }
 }
+
+testGetUserRingtone();
+
+import ChimeMeetingManager from "./ChimeMeetingManager.js";
+import ScyllaDb from "./ScyllaDb.js";
+
 async function testGetUserMeetingAvatar() {
   console.log("\n==== TEST: getUserMeetingAvatar ====\n");
 
@@ -1910,6 +2206,11 @@ async function testGetUserMeetingAvatar() {
     console.error("❌ Default logic test failed:", e.message);
   }
 }
+
+testGetUserMeetingAvatar();
+
+import ChimeMeetingManager from "./ChimeMeetingManager.js";
+
 async function testGetDefaultAvatars() {
   console.log("\n==== TEST: getDefaultAvatars ====\n");
 
@@ -1969,6 +2270,11 @@ async function testGetDefaultAvatars() {
   // 10. ✅ Ready for front-end use
   console.log("✅ Ready for front-end <select> or avatar picker UI");
 }
+
+testGetDefaultAvatars();
+
+import ChimeMeetingManager from "./ChimeMeetingManager.js";
+import ScyllaDb from "./ScyllaDb.js";
 
 async function testNotifyMeetingStarted() {
   console.log("\n==== TEST: notifyMeetingStarted ====\n");
@@ -2074,5 +2380,8 @@ async function testNotifyMeetingStarted() {
   }
 }
 
-// Run all tests
-runAllTests();
+testNotifyMeetingStarted();
+
+//add support for trailer and or thumbanil
+// get call type - audio video priate public
+// validateUserAccess
