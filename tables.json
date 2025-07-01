@@ -116,5 +116,85 @@
       "Ringtone": { "type": "S", "description": "User ringtone preference" },
       "AvatarUrl": { "type": "S", "description": "User avatar URL" }
     }
+  },
+  "IVSStreams": {
+    "PK": "id",
+    "columns": {
+      "id": { "type": "S", "description": "UUID stream ID" },
+      "channel_id": { "type": "S", "description": "Channel UUID" },
+      "creator_user_id": { "type": "S", "description": "Creator user UUID" },
+      "title": { "type": "S", "description": "Stream title" },
+      "description": { "type": "S", "description": "Stream description" },
+      "thumbnail_url": { "type": "S", "description": "Thumbnail image URL" },
+      "trailer_url": { "type": "S", "description": "Trailer video URL" },
+      "access_type": {
+        "type": "S",
+        "description": "Access type (e.g., open_paid)"
+      },
+      "pricing_type": { "type": "S", "description": "Pricing model" },
+      "is_private": { "type": "BOOL", "description": "Privacy flag" },
+      "status": { "type": "S", "description": "Stream status" },
+      "start_time": { "type": "S", "description": "Start timestamp" },
+      "end_time": { "type": "S", "description": "End timestamp" },
+      "vod_url": { "type": "S", "description": "Video-on-demand URL" },
+      "linked_stream_id": { "type": "S", "description": "Linked stream UUID" },
+      "allow_comments": {
+        "type": "BOOL",
+        "description": "Comments enabled flag"
+      },
+      "goals": { "type": "L", "description": "List of goal objects" },
+      "games": { "type": "L", "description": "List of game data" },
+      "gifts": { "type": "L", "description": "List of gift entries" },
+      "tips": { "type": "L", "description": "List of tip logs" },
+      "collaborators": { "type": "L", "description": "List of UUIDs" },
+      "tags": { "type": "L", "description": "List of tag strings" },
+      "multi_cam_urls": { "type": "L", "description": "List of camera URLs" },
+      "announcements": { "type": "L", "description": "List of announcements" },
+      "stream_key": { "type": "S", "description": "Stream key" },
+      "created_at": { "type": "S", "description": "Creation timestamp" },
+      "updated_at": { "type": "S", "description": "Update timestamp" }
+    }
+  },
+  "IVSJoinLogs": {
+    "PK": "id",
+    "columns": {
+      "id": { "type": "S", "description": "Join log UUID" },
+      "stream_id": { "type": "S", "description": "Related stream UUID" },
+      "user_id": { "type": "S", "description": "User UUID" },
+      "role": { "type": "S", "description": "User role" },
+      "joined_at": { "type": "S", "description": "Join timestamp" },
+      "left_at": { "type": "S", "description": "Leave timestamp" }
+    }
+  },
+  "IVSStats": {
+    "PK": "stream_id",
+    "columns": {
+      "stream_id": { "type": "S", "description": "Stream UUID" },
+      "likes": { "type": "N", "description": "Number of likes" },
+      "views": { "type": "N", "description": "View count" },
+      "watch_duration": { "type": "N", "description": "Total watch duration" },
+      "join_count": { "type": "N", "description": "Total joins" },
+      "leave_count": { "type": "N", "description": "Total leaves" },
+      "concurrent_max": { "type": "N", "description": "Max concurrent users" },
+      "toys_log": { "type": "L", "description": "List of toys used" },
+      "tip_board": { "type": "L", "description": "List of tips" },
+      "highest_tipper": { "type": "S", "description": "User ID" },
+      "updated_at": { "type": "S", "description": "Update timestamp" }
+    }
+  },
+  "Channels": {
+    "PK": "id",
+    "columns": {
+      "id": { "type": "S", "description": "Channel/user ID" },
+      "name": { "type": "S", "description": "Channel name" },
+      "description": { "type": "S", "description": "Channel description" },
+      "profile_thumbnail": { "type": "S", "description": "Avatar" },
+      "tags": { "type": "L", "description": "Tags" },
+      "language": { "type": "S", "description": "Language" },
+      "category": { "type": "S", "description": "Category" },
+      "followers": { "type": "N", "description": "Follower count" },
+      "created_at": { "type": "S", "description": "Created at" },
+      "updated_at": { "type": "S", "description": "Updated at" }
+    }
   }
 }

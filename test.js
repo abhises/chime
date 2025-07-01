@@ -44,6 +44,7 @@ async function runAllTests() {
     await testGetUserMeetingAvatar();
     await testGetDefaultAvatars();
     await testNotifyMeetingStarted();
+    await testChannelFunctions();
 
     console.log("\n🎉 All tests completed!");
   } catch (error) {
@@ -2071,6 +2072,62 @@ async function testNotifyMeetingStarted() {
     console.log("✅ No exception thrown (placeholder safe)");
   } catch (e) {
     console.error("❌ Unexpected error:", e.message);
+  }
+}
+
+async function testChannelFunctions() {
+  console.log("\n==== TEST: createChannel & deleteChannel ====\n");
+
+  // 1. ✅ createChannel should not throw and should log correctly
+  try {
+    const result = await ChimeMeetingManager.createChannel();
+    console.log("✅ createChannel executed successfully with result:", result);
+  } catch (e) {
+    console.error("❌ createChannel threw an error:", e.message);
+  }
+
+  // 2. ✅ deleteChannel should not throw and should log correctly
+  try {
+    const result = await ChimeMeetingManager.deleteChannel();
+    console.log("✅ deleteChannel executed successfully with result:", result);
+  } catch (e) {
+    console.error("❌ deleteChannel threw an error:", e.message);
+  }
+
+  // 3. ✅ Confirm it returns null
+  try {
+    const createResult = await ChimeMeetingManager.createChannel();
+    const deleteResult = await ChimeMeetingManager.deleteChannel();
+
+    if (createResult === null && deleteResult === null) {
+      console.log("✅ Both functions return null as expected");
+    } else {
+      console.error("❌ One or both functions did not return null");
+    }
+  } catch (e) {
+    console.error("❌ Error during null return check:", e.message);
+  }
+
+  // 4. ✅ Call repeatedly without error
+  try {
+    await ChimeMeetingManager.createChannel();
+    await ChimeMeetingManager.createChannel();
+    await ChimeMeetingManager.deleteChannel();
+    await ChimeMeetingManager.deleteChannel();
+    console.log("✅ Multiple calls to channel methods succeeded");
+  } catch (e) {
+    console.error("❌ Error on repeated calls:", e.message);
+  }
+
+  // 5. ✅ Special case: call in rapid succession
+  try {
+    await Promise.all([
+      ChimeMeetingManager.createChannel(),
+      ChimeMeetingManager.deleteChannel(),
+    ]);
+    console.log("✅ Rapid succession call handled");
+  } catch (e) {
+    console.error("❌ Failed in rapid succession call:", e.message);
   }
 }
 
