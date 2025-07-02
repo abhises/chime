@@ -2,14 +2,21 @@
 import {
   CreateChannelCommand,
   CreateStreamKeyCommand,
+  DeleteStreamKeyCommand, // ✅
+  ListStreamKeysCommand, // ✅
   DeleteChannelCommand,
   ListChannelsCommand,
   GetChannelCommand,
 } from "@aws-sdk/client-ivs";
-import getIvsClient from "./ivsClient.js";
+import getIvsClient from "./ivsClient.js"; // ✅ This correctly imports the default
 import logEvent from "../utils/logEvent.js";
 import logError from "../utils/logError.js";
 import ScyllaDb from "../ScyllaDb.js";
+
+const STREAMS_TABLE = "IVSStreams";
+const JOIN_LOGS_TABLE = "IVSJoinLogs";
+const STATS_TABLE = "IVSStats";
+const CHANNELS_TABLE = "IVSChannels";
 
 export default class IVSService {
   static async createStream({
@@ -38,7 +45,14 @@ export default class IVSService {
           type: "STANDARD",
         })
       );
+      console.log("channel id ", channelRes.channel.arn);
       awsChannel = channelRes.channel;
+      const existingKeys = await ivsClient.send(
+        new ListStreamKeysCommand({ channelArn: awsChannel.arn })
+      );
+      for (const key of existingKeys.streamKeys || []) {
+        await ivsClient.send(new DeleteStreamKeyCommand({ arn: key.arn }));
+      }
 
       const keyRes = await ivsClient.send(
         new CreateStreamKeyCommand({
@@ -47,7 +61,7 @@ export default class IVSService {
       );
       streamKey = keyRes.streamKey;
 
-      await ScyllaDb.insert(CHANNELS_TABLE, {
+      await ScyllaDb.putItem(CHANNELS_TABLE, {
         id: creator_user_id,
         name: awsChannel.name,
         description,
@@ -90,7 +104,7 @@ export default class IVSService {
       stream_key: streamKey.value,
     };
 
-    await ScyllaDb.insert(STREAMS_TABLE, item);
+    await ScyllaDb.putItem(STREAMS_TABLE, item);
     logEvent("createStream", { stream_id: id, creator_user_id });
 
     return {
@@ -105,7 +119,7 @@ export default class IVSService {
   }
   static async updateChannel(channel_id, updates) {
     updates.updated_at = new Date().toISOString();
-    return await ScyllaDb.update(CHANNELS_TABLE, channel_id, updates);
+    return await ScyllaDb.putItem(CHANNELS_TABLE, channel_id, updates);
   }
   static async listChannelStreams(channel_id) {
     return await ScyllaDb.query(STREAMS_TABLE, { channel_id });

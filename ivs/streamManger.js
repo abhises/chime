@@ -1,6 +1,6 @@
 // StreamManager.js
 import crypto from "crypto";
-import ScyllaDb from "./ScyllaDb.js";
+import ScyllaDb from "../ScyllaDb.js";
 import Redis from "ioredis";
 import IVSService from "./ivs.js";
 import logEvent from "../utils/logEvent.js";
@@ -11,6 +11,7 @@ const redis = process.env.REDIS_URL ? new Redis(process.env.REDIS_URL) : null;
 const STREAMS_TABLE = "IVSStreams";
 const CHANNELS_TABLE = "IVSChannels";
 const STATS_TABLE = "IVSStats";
+const JOIN_LOGS_TABLE = "IVSJoinLogs";
 
 export default class StreamManager {
   static async createStream({
@@ -50,7 +51,7 @@ export default class StreamManager {
       updated_at: now,
     };
 
-    await ScyllaDb.insert(STREAMS_TABLE, item);
+    await ScyllaDb.putItem(STREAMS_TABLE, item);
     logEvent("createStream", { stream_id: id });
 
     return item;
@@ -62,7 +63,7 @@ export default class StreamManager {
 
   static async updateStream(stream_id, updates) {
     updates.updated_at = new Date().toISOString();
-    await ScyllaDb.update(STREAMS_TABLE, stream_id, updates);
+    await ScyllaDb.putItem(STREAMS_TABLE, stream_id, updates);
     logEvent("updateStream", { stream_id, updates });
   }
 
@@ -74,7 +75,7 @@ export default class StreamManager {
       joined_at: new Date().toISOString(),
       role,
     };
-    await ScyllaDb.insert(JOIN_LOGS_TABLE, entry);
+    await ScyllaDb.putItem(JOIN_LOGS_TABLE, entry);
     await redis.sadd(`stream:${stream_id}:active`, user_id);
     logEvent("joinStream", entry);
   }
