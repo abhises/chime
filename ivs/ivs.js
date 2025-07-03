@@ -125,8 +125,15 @@ export default class IVSService {
     updates.updated_at = new Date().toISOString();
     return await ScyllaDb.putItem(CHANNELS_TABLE, channel_id, updates);
   }
+  // static async listChannelStreams(channel_id) {
+  //   return await ScyllaDb.query(STREAMS_TABLE, "channel_id = :cid", {
+  //     ":cid": channel_id,
+  //   });
+  // }
+
   static async listChannelStreams(channel_id) {
-    return await ScyllaDb.query(STREAMS_TABLE, { channel_id });
+    const allStreams = await ScyllaDb.scan("IVSStreams"); // ⚠️ Scans all items
+    return allStreams.filter((stream) => stream.channel_id === channel_id);
   }
 
   static async deleteChannel(channelArn) {

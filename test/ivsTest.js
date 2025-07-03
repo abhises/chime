@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import ScyllaDb from "../ScyllaDb.js";
 import IVSService from "../ivs/ivs.js";
 import getIvsClient from "../ivs/ivsClient.js";
+import logEvent from "../utils/logEvent.js";
 import {
   CreateChannelCommand,
   CreateStreamKeyCommand,
@@ -145,7 +146,7 @@ async function testListChannelStreams() {
     const awsChannel = channelRes.channel;
     console.log("✅ Created channel with ARN:", awsChannel.arn);
 
-    // Step 2: Clean old keys and create a new stream key
+    // Step 2: Clean old stream keys
     const existingKeys = await ivsClient.send(
       new ListStreamKeysCommand({ channelArn: awsChannel.arn })
     );
@@ -153,33 +154,53 @@ async function testListChannelStreams() {
       await ivsClient.send(new DeleteStreamKeyCommand({ arn: key.arn }));
     }
 
-    await ivsClient.send(
+    // Step 3: Create a new stream key
+    const keyRes = await ivsClient.send(
       new CreateStreamKeyCommand({
         channelArn: awsChannel.arn,
       })
     );
+    const streamKey = keyRes.streamKey;
 
-    // Step 3: Store channel metadata in DB
-    await ScyllaDb.putItem(CHANNELS_TABLE, {
-      id: awsChannel.arn,
-      name: awsChannel.name,
+    // Step 4: Store metadata in DB
+    const id = crypto.randomUUID(); // ✅ generate stream ID
+    const item = {
+      id,
+      channel_id: awsChannel.arn,
+      creator_user_id: testCreatorId,
+      title: `Test Stream ${Date.now()}`,
       description: "",
-      profile_thumbnail: "",
+      access_type: "public",
+      is_private: false,
+      pricing_type: "free",
+      allow_comments: false,
+      collaborators: [],
       tags: [],
-      language: "",
-      category: "",
-      followers: 0,
-      aws_channel_arn: awsChannel.arn,
-      playback_url: awsChannel.playbackUrl,
+      goals: [],
+      games: [],
+      gifts: [],
+      tips: [],
+      multi_cam_urls: [],
+      announcements: [],
+      status: "offline",
       created_at: now,
       updated_at: now,
+      stream_key: streamKey.value,
+    };
+
+    await ScyllaDb.putItem(STREAMS_TABLE, item);
+
+    logEvent("createStream", {
+      stream_id: id,
+      creator_user_id: testCreatorId,
+      channel_id: awsChannel.arn,
     });
 
-    // Step 4: Call listChannelStreams
+    // Step 5: Call listChannelStreams
     const streams = await IVSService.listChannelStreams(awsChannel.arn);
 
     if (Array.isArray(streams)) {
-      console.log("   ▶️ Found", streams.length, "streams");
+      console.log("   ▶️ Found", streams.length, "stream(s)");
       logSuccess("listChannelStreams returned a valid array");
     } else {
       logError("Expected array but got something else", new Error());
@@ -188,7 +209,6 @@ async function testListChannelStreams() {
     logError("listChannelStreams test failed", error);
   }
 }
-
 async function testGetChannelMeta() {
   logTest("getChannelMeta");
 
