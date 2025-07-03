@@ -190,7 +190,7 @@ export default class StreamManager {
   }
 
   static async getTipLeaderboard(stream_id) {
-    const stats = await ScyllaDb.getItem(STATS_TABLE, { id: stream_id });
+    const stats = await ScyllaDb.getItem(STATS_TABLE, { stream_id });
     return (stats.tip_board || []).sort((a, b) => b.total - a.total);
   }
 

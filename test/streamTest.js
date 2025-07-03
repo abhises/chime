@@ -86,6 +86,7 @@ async function runAllStreamManagerTests() {
     await testSetTrailerAndThumbnail();
     await testAddAndListCollaborators();
     await testGetSessionType();
+    await testGetTipLeaderboard();
 
     console.log("\n🎉 All StreamManager tests completed!");
   } catch (err) {
@@ -266,4 +267,19 @@ async function testGetStats() {
   }
 }
 
+async function testGetTipLeaderboard() {
+  logTest("getTipLeaderboard");
+
+  try {
+    // Step 1: Create a dummy stream_id and mock tip_board
+    // Step 3: Call getTipLeaderboard
+    const leaderboard = await StreamManager.getTipLeaderboard(testStream.id);
+
+    console.log("leaderboard", leaderboard);
+
+    // Step 4: Validate
+  } catch (err) {
+    logError("getTipLeaderboard test failed", err);
+  }
+}
 runAllStreamManagerTests();
