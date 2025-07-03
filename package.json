@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "main": "ScyllaDb.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:ivs": "node test/ivsTest.js",
+    "test:chimeTest": "node test/chimeTest.js",
+    "test:stream": "node test/streamTest.js"
   },
   "type": "module",
   "keywords": [],
