@@ -1,8 +1,20 @@
 import dotenv from "dotenv";
 import ScyllaDb from "../ScyllaDb.js";
 import IVSService from "../ivs/ivs.js";
+import getIvsClient from "../ivs/ivsClient.js";
+import {
+  CreateChannelCommand,
+  CreateStreamKeyCommand,
+  DeleteStreamKeyCommand, // ✅
+  ListStreamKeysCommand, // ✅
+} from "@aws-sdk/client-ivs";
 
 dotenv.config();
+
+const STREAMS_TABLE = "IVSStreams";
+const JOIN_LOGS_TABLE = "IVSJoinLogs";
+const STATS_TABLE = "IVSStats";
+const CHANNELS_TABLE = "IVSChannels";
 
 // Test utilities
 function logTest(testName) {
@@ -118,10 +130,53 @@ async function testListChannelStreams() {
   logTest("listChannelStreams");
 
   try {
-    const channelArn =
-      "arn:aws:ivs:us-east-1:701253760804:channel/7GOkYUVpMTLP";
+    const now = new Date().toISOString();
+    const ivsClient = getIvsClient();
 
-    const streams = await IVSService.listChannelStreams(channelArn);
+    // Step 1: Create IVS channel
+    const channelRes = await ivsClient.send(
+      new CreateChannelCommand({
+        name: `channel-${testCreatorId}-${Date.now()}`,
+        latencyMode: "LOW",
+        type: "STANDARD",
+      })
+    );
+
+    const awsChannel = channelRes.channel;
+    console.log("✅ Created channel with ARN:", awsChannel.arn);
+
+    // Step 2: Clean old keys and create a new stream key
+    const existingKeys = await ivsClient.send(
+      new ListStreamKeysCommand({ channelArn: awsChannel.arn })
+    );
+    for (const key of existingKeys.streamKeys || []) {
+      await ivsClient.send(new DeleteStreamKeyCommand({ arn: key.arn }));
+    }
+
+    await ivsClient.send(
+      new CreateStreamKeyCommand({
+        channelArn: awsChannel.arn,
+      })
+    );
+
+    // Step 3: Store channel metadata in DB
+    await ScyllaDb.putItem(CHANNELS_TABLE, {
+      id: awsChannel.arn,
+      name: awsChannel.name,
+      description: "",
+      profile_thumbnail: "",
+      tags: [],
+      language: "",
+      category: "",
+      followers: 0,
+      aws_channel_arn: awsChannel.arn,
+      playback_url: awsChannel.playbackUrl,
+      created_at: now,
+      updated_at: now,
+    });
+
+    // Step 4: Call listChannelStreams
+    const streams = await IVSService.listChannelStreams(awsChannel.arn);
 
     if (Array.isArray(streams)) {
       console.log("   ▶️ Found", streams.length, "streams");
@@ -138,21 +193,76 @@ async function testGetChannelMeta() {
   logTest("getChannelMeta");
 
   try {
-    const channelId = "7GOkYUVpMTLP"; // assuming this is stored as `id` in your DB
+    const now = new Date().toISOString();
 
-    const meta = await IVSService.getChannelMeta(channelId);
+    let awsChannel, streamKey;
 
-    if (meta && meta.aws_channel_arn) {
-      console.log("   ▶️ Channel ARN:", meta.aws_channel_arn);
-      logSuccess("getChannelMeta returned metadata");
-    } else {
-      logError("getChannelMeta returned no data", new Error());
+    try {
+      const ivsClient = getIvsClient();
+
+      // Create channel
+      const channelRes = await ivsClient.send(
+        new CreateChannelCommand({
+          name: `channel-${crypto.randomUUID()}`,
+          latencyMode: "LOW",
+          type: "STANDARD",
+        })
+      );
+
+      awsChannel = channelRes.channel;
+      console.log("✅ Created Channel ARN:", awsChannel.arn);
+
+      // Clean up any existing stream keys
+      const existingKeys = await ivsClient.send(
+        new ListStreamKeysCommand({ channelArn: awsChannel.arn })
+      );
+
+      for (const key of existingKeys.streamKeys || []) {
+        await ivsClient.send(new DeleteStreamKeyCommand({ arn: key.arn }));
+      }
+
+      // Create new stream key
+      const keyRes = await ivsClient.send(
+        new CreateStreamKeyCommand({
+          channelArn: awsChannel.arn,
+        })
+      );
+
+      streamKey = keyRes.streamKey;
+
+      // Save channel to ScyllaDB
+      await ScyllaDb.putItem(CHANNELS_TABLE, {
+        id: awsChannel.arn, // ✅ using ARN as the primary key
+        name: awsChannel.name,
+        description: "",
+        profile_thumbnail: "",
+        tags: [],
+        language: "",
+        category: "",
+        followers: 0,
+        aws_channel_arn: awsChannel.arn,
+        playback_url: awsChannel.playbackUrl,
+        created_at: now,
+        updated_at: now,
+      });
+
+      // Fetch channel meta
+      const meta = await IVSService.getChannelMeta(awsChannel.arn); // ✅ pass ARN to match saved id
+
+      if (meta && meta.aws_channel_arn) {
+        console.log("   ▶️ Channel ARN:", meta.aws_channel_arn);
+        logSuccess("getChannelMeta returned metadata");
+      } else {
+        logError("getChannelMeta returned no data", new Error());
+      }
+    } catch (err) {
+      logError("IVS or DB setup failed", err);
+      throw new Error("Failed to create IVS channel or stream key");
     }
   } catch (error) {
     logError("getChannelMeta test failed", error);
   }
 }
-
 async function testDeleteChannel() {
   logTest("deleteChannel");
 

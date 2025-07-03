@@ -105,7 +105,11 @@ export default class IVSService {
     };
 
     await ScyllaDb.putItem(STREAMS_TABLE, item);
-    logEvent("createStream", { stream_id: id, creator_user_id });
+    logEvent("createStream", {
+      stream_id: id,
+      creator_user_id,
+      channel_id: awsChannel.arn,
+    });
 
     return {
       ...item,
@@ -115,7 +119,7 @@ export default class IVSService {
   }
 
   static async getChannelMeta(channel_id) {
-    return await ScyllaDb.get(CHANNELS_TABLE, channel_id);
+    return await ScyllaDb.getItem(CHANNELS_TABLE, { id: channel_id });
   }
   static async updateChannel(channel_id, updates) {
     updates.updated_at = new Date().toISOString();
