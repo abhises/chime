@@ -57,14 +57,22 @@ export default class StreamManager {
     return item;
   }
 
-  static async listChannelStreams(channel_id) {
-    return await ScyllaDb.query(STREAMS_TABLE, { channel_id });
-  }
-
   static async updateStream(stream_id, updates) {
+    console.log("console from updateStream", stream_id, updates);
     updates.updated_at = new Date().toISOString();
-    await ScyllaDb.putItem(STREAMS_TABLE, stream_id, updates);
+    const updatedItem = {
+      id: stream_id,
+      ...updates,
+    };
+
+    await ScyllaDb.putItem(STREAMS_TABLE, updatedItem);
     logEvent("updateStream", { stream_id, updates });
+
+    const updated = await ScyllaDb.getItem(STREAMS_TABLE, {
+      id: stream_id,
+    });
+
+    console.log("🔍 Verified Stream:", updated);
   }
 
   static async joinStream(stream_id, user_id, role = "viewer") {
