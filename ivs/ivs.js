@@ -123,7 +123,8 @@ export default class IVSService {
   }
   static async updateChannel(channel_id, updates) {
     updates.updated_at = new Date().toISOString();
-    return await ScyllaDb.putItem(CHANNELS_TABLE, channel_id, updates);
+    const fullItem = { id: channel_id, ...updates };
+    return await ScyllaDb.putItem(CHANNELS_TABLE, fullItem);
   }
   // static async listChannelStreams(channel_id) {
   //   return await ScyllaDb.query(STREAMS_TABLE, "channel_id = :cid", {

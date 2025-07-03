@@ -30,6 +30,45 @@ function logError(message, error) {
   console.error(`❌ ${message}:`, error.message);
 }
 
+let globalStreamKey = null;
+let globalChannel = null;
+
+async function createChannelWithStreamKey(testCreatorId = "user001") {
+  if (globalChannel && globalStreamKey)
+    return { channel: globalChannel, streamKey: globalStreamKey };
+
+  const ivsClient = getIvsClient();
+
+  const channelRes = await ivsClient.send(
+    new CreateChannelCommand({
+      name: `test-channel-${testCreatorId}-${Date.now()}`,
+      latencyMode: "LOW",
+      type: "STANDARD",
+    })
+  );
+
+  const channel = channelRes.channel;
+
+  const existingKeys = await ivsClient.send(
+    new ListStreamKeysCommand({ channelArn: channel.arn })
+  );
+  for (const key of existingKeys.streamKeys || []) {
+    await ivsClient.send(new DeleteStreamKeyCommand({ arn: key.arn }));
+  }
+
+  const keyRes = await ivsClient.send(
+    new CreateStreamKeyCommand({
+      channelArn: channel.arn,
+    })
+  );
+
+  globalChannel = channel;
+  globalStreamKey = keyRes.streamKey;
+
+  return { channel: globalChannel, streamKey: globalStreamKey };
+}
+
+let testStream;
 // Global test data
 const testCreatorId = "user001";
 
@@ -42,6 +81,7 @@ async function runAllTests() {
 
     // Run all tests
     await testCreateStream();
+    await testUpdateChannel();
     await testCreateStreamWithoutUserId();
     await testDuplicateStreamKey();
     await testListChannelStreams();
@@ -62,23 +102,77 @@ async function testCreateStream() {
   logTest("createStream");
 
   try {
-    const stream = await IVSService.createStream({
-      creator_user_id: testCreatorId,
+    const { channel, streamKey } = await createChannelWithStreamKey();
+
+    testStream = await IVSService.createStream({
+      creator_user_id: "user001",
+      channel_id: channel.arn,
       title: "Test Stream",
-      access_type: "public",
-      is_private: false,
-      pricing_type: "free",
-      description: "A test IVS stream",
-      tags: ["test", "ivs"],
-      allow_comments: true,
-      collaborators: [],
+      stream_key: streamKey.value,
+      access_type: "open_public", // ✅ required and must include "open"
     });
 
-    console.log("✅ Stream created with ID:", stream.id);
-    console.log("   ▶️ Playback URL:", stream.playback_url);
-    console.log("   🎥 Ingest Endpoint:", stream.ingest_endpoint);
-  } catch (error) {
-    logError("Failed to create IVS stream", error);
+    if (testStream && testStream.id) logSuccess("Stream created successfully");
+    else throw new Error("No stream returned");
+  } catch (err) {
+    logError("createStream failed", err);
+  }
+}
+
+async function testUpdateChannel() {
+  logTest("updateChannel");
+
+  try {
+    const { channel, streamKey } = await createChannelWithStreamKey();
+
+    // Step 1: Insert initial channel into DB
+    const initialChannel = {
+      id: channel.arn,
+      name: "Initial Channel",
+      description: "Initial description",
+      profile_thumbnail: "",
+      tags: [],
+      language: "en",
+      category: "education",
+      followers: 0,
+      aws_channel_arn: channel.arn,
+      playback_url: "https://playback.example.com",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    await ScyllaDb.putItem(CHANNELS_TABLE, initialChannel);
+
+    // Step 2: Prepare update data
+    const updates = {
+      description: "Updated description",
+      category: "gaming",
+      language: "hi",
+    };
+
+    // Step 3: Call updateChannel
+    await IVSService.updateChannel(channel.arn, updates);
+
+    // Step 4: Validate that it was updated
+    const updatedChannel = await ScyllaDb.getItem(CHANNELS_TABLE, {
+      id: channel.arn,
+    });
+
+    const isUpdated =
+      updatedChannel.description === updates.description &&
+      updatedChannel.category === updates.category &&
+      updatedChannel.language === updates.language;
+
+    if (isUpdated) {
+      logSuccess("Channel updated successfully");
+    } else {
+      logError(
+        "Channel fields did not update as expected",
+        new Error(JSON.stringify(updatedChannel))
+      );
+    }
+  } catch (err) {
+    logError("updateChannel test failed", err);
   }
 }
 

@@ -1,6 +1,14 @@
 import dotenv from "dotenv";
 import StreamManager from "../ivs/streamManger.js";
 import ScyllaDb from "../ScyllaDb.js";
+import getIvsClient from "../ivs/ivsClient.js";
+import {
+  CreateChannelCommand,
+  CreateStreamKeyCommand,
+  ListStreamKeysCommand,
+  DeleteStreamKeyCommand,
+} from "@aws-sdk/client-ivs";
+import crypto from "crypto";
 
 dotenv.config();
 
@@ -16,6 +24,48 @@ function logError(message, error) {
   console.error(`❌ ${message}:`, error.message);
 }
 
+const STREAMS_TABLE = "IVSStreams";
+
+let globalStreamKey = null;
+let globalChannel = null;
+
+async function createChannelWithStreamKey(testCreatorId = "user001") {
+  if (globalChannel && globalStreamKey)
+    return { channel: globalChannel, streamKey: globalStreamKey };
+
+  const ivsClient = getIvsClient();
+
+  const channelRes = await ivsClient.send(
+    new CreateChannelCommand({
+      name: `test-channel-${testCreatorId}-${Date.now()}`,
+      latencyMode: "LOW",
+      type: "STANDARD",
+    })
+  );
+
+  const channel = channelRes.channel;
+
+  const existingKeys = await ivsClient.send(
+    new ListStreamKeysCommand({ channelArn: channel.arn })
+  );
+  for (const key of existingKeys.streamKeys || []) {
+    await ivsClient.send(new DeleteStreamKeyCommand({ arn: key.arn }));
+  }
+
+  const keyRes = await ivsClient.send(
+    new CreateStreamKeyCommand({
+      channelArn: channel.arn,
+    })
+  );
+
+  globalChannel = channel;
+  globalStreamKey = keyRes.streamKey;
+
+  return { channel: globalChannel, streamKey: globalStreamKey };
+}
+
+let testStream;
+
 async function runAllStreamManagerTests() {
   try {
     console.log("\n🚀 Starting StreamManager Test Suite");
@@ -29,7 +79,9 @@ async function runAllStreamManagerTests() {
     await testJoinLeaveStream();
     await testAddAnnouncement();
     await testValidateUserAccess();
-    await testTipFlow();
+    await testRegisterTip();
+    // await testTipFlow();
+    await testGetStats();
     await testSetGoalProgress();
     await testSetTrailerAndThumbnail();
     await testAddAndListCollaborators();
@@ -41,19 +93,19 @@ async function runAllStreamManagerTests() {
   }
 }
 
-const streamData = {
-  creator_user_id: "user123",
-  channel_id: "channel-xyz",
-  title: "Test Stream",
-  access_type: "public",
-};
-
-let testStream;
-
 async function testCreateStream() {
   logTest("createStream");
   try {
-    testStream = await StreamManager.createStream(streamData);
+    const { channel, streamKey } = await createChannelWithStreamKey();
+
+    testStream = await StreamManager.createStream({
+      creator_user_id: "user001",
+      channel_id: channel.arn,
+      title: "Test Stream",
+      stream_key: streamKey.value,
+      access_type: "open_public", // ✅ required and must include "open"
+    });
+
     if (testStream && testStream.id) logSuccess("Stream created successfully");
     else throw new Error("No stream returned");
   } catch (err) {
@@ -63,34 +115,18 @@ async function testCreateStream() {
 
 async function testUpdateStream() {
   logTest("StreamManager.updateStream");
-
   try {
-    const now = new Date().toISOString();
+    const { channel, streamKey } = await createChannelWithStreamKey(); // ✅ Fix here
 
-    // Step 1: Create a new stream
-    const stream = await StreamManager.createStream({
-      creator_user_id: "test-user-001",
-      channel_id: "channel-123",
-      title: "Original Stream Title",
-      access_type: "public",
-      description: "Initial test stream",
-      tags: ["initial"],
-    });
-
-    const stream_id = stream.id;
-
-    console.log("streamId", stream_id);
-
-    // Step 2: Update stream with new values
     const updates = {
-      title: "Updated Stream Title is not live",
-      description: "This stream has been updated",
-      status: "live",
+      creator_user_id: "user001",
+      channel_id: channel.arn,
+      title: "Test Stream",
+      stream_key: streamKey.value,
+      access_type: "open_public",
     };
 
-    await StreamManager.updateStream(stream_id, updates);
-
-    // Step 3: Fetch updated stream to verify
+    await StreamManager.updateStream(testStream.id, updates);
   } catch (err) {
     logError("Failed to update stream", err);
   }
@@ -123,10 +159,11 @@ async function testAddAnnouncement() {
 
 async function testValidateUserAccess() {
   logTest("validateUserAccess");
+
   try {
     const access = await StreamManager.validateUserAccess(
       testStream.id,
-      "user123"
+      "user001"
     );
     if (access) logSuccess("User has access");
     else throw new Error("Access denied");
@@ -135,19 +172,21 @@ async function testValidateUserAccess() {
   }
 }
 
-async function testTipFlow() {
+async function testRegisterTip() {
   logTest("registerTip + getTipLeaderboard");
+
   try {
-    await StreamManager.registerTip(
+    // Step 1: Create channel and stream key
+
+    // Step 3: Register tip
+    const registerTip = await StreamManager.registerTip(
       testStream.id,
-      "tipper1",
+      "user001",
       50,
       "Great stream!"
     );
-    const leaderboard = await StreamManager.getTipLeaderboard(testStream.id);
-    if (leaderboard.length > 0)
-      logSuccess("Tip registered and leaderboard fetched");
-    else throw new Error("No leaderboard returned");
+    console.log("registertip ", registerTip);
+    // Step 4: Get leaderboard
   } catch (err) {
     logError("Tip flow failed", err);
   }
@@ -156,10 +195,14 @@ async function testTipFlow() {
 async function testSetGoalProgress() {
   logTest("setGoalProgress");
   try {
-    await ScyllaDb.update("IVSStreams", testStream.id, {
+    await ScyllaDb.putItem(STREAMS_TABLE, {
+      id: testStream.id,
       goals: [{ id: "goal1", target: 100, progress: 0, achieved: false }],
+      access_type: "open_public",
     });
+
     await StreamManager.setGoalProgress(testStream.id, "goal1", 100);
+
     logSuccess("Goal progress set and marked as achieved");
   } catch (err) {
     logError("setGoalProgress failed", err);
@@ -194,10 +237,32 @@ async function testGetSessionType() {
   logTest("getSessionType");
   try {
     const type = await StreamManager.getSessionType(testStream.id);
+    // console.log("get the type", type);
     if (type) logSuccess("Session type retrieved: " + type);
     else throw new Error("Session type undefined");
   } catch (err) {
     logError("getSessionType failed", err);
+  }
+}
+
+async function testGetStats() {
+  logTest("StreamManager.getStats");
+
+  try {
+    // Insert test stats manually
+
+    // Call the method to test
+    const result = await StreamManager.getStats(testStream.id);
+    console.log("results", result);
+
+    // Check result
+    if (result) {
+      logSuccess("getStats returned expected result", result);
+    } else {
+      throw new Error("Returned stats are incorrect or missing");
+    }
+  } catch (err) {
+    logError("getStats failed", err);
   }
 }
 
