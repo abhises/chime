@@ -196,5 +196,39 @@
       "created_at": { "type": "S", "description": "Created at" },
       "updated_at": { "type": "S", "description": "Updated at" }
     }
+  },
+
+  "MeetingAttendees_UserProfiles": {
+    "PK": "UserId",
+    "columns": {
+      "UserId": {
+        "type": "S",
+        "description": "User identifier (Primary Key)"
+      },
+      "Ringtone": {
+        "type": "S",
+        "description": "User ringtone preference"
+      },
+      "AvatarUrl": {
+        "type": "S",
+        "description": "User avatar URL (optional)"
+      },
+      "DisplayName": {
+        "type": "S",
+        "description": "User display name (optional)"
+      },
+      "Email": {
+        "type": "S",
+        "description": "User email address (optional)"
+      },
+      "CreatedAt": {
+        "type": "S",
+        "description": "Timestamp when profile was created"
+      },
+      "UpdatedAt": {
+        "type": "S",
+        "description": "Timestamp when profile was last updated"
+      }
+    }
   }
 }

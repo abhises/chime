@@ -1,14 +1,13 @@
-import crypto from "crypto";
-import http from "http";
-import https from "https";
-import { promises as fs } from "fs";
-import { pathToFileURL } from "url";
-
+const crypto = require("crypto");
+const http = require("http");
+const https = require("https");
+const fs = require("fs").promises;
+const { pathToFileURL } = require("url");
 /**
  * ScyllaDb - Node.js client for ScyllaDB with Alternator endpoint
  * Provides DynamoDB-compatible operations with high performance
  */
-export default class ScyllaDb {
+class ScyllaDb {
   /* ---------- configurable defaults ---------- */
   static DEFAULT_RETRIES = 3;
   static INITIAL_BACKOFF_MS = 100;
@@ -1151,3 +1150,4 @@ export default class ScyllaDb {
     return crypto.createHash("md5").update(json).digest("hex");
   }
 }
+module.exports = ScyllaDb;

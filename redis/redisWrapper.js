@@ -1,4 +1,4 @@
-import { createClient } from "redis";
+createClient = require("redis");
 
 class RedisWrapper {
   constructor() {
@@ -105,4 +105,4 @@ class RedisWrapper {
 
 // Create singleton instance
 const redisWrapper = new RedisWrapper();
-export default redisWrapper;
+module.exports = redisWrapper;
