@@ -489,14 +489,14 @@ class Chime {
       const params = SafeUtils.sanitizeValidate({
         meetingId: { value: meetingId, type: "string", required: true },
         userId: { value: userId, type: "string", required: true },
-        score: { value: score, type: "number", required: true },
+        score: { value: score, type: "numeric", required: true },
         feedback: { value: feedback, type: "string", required: false },
         commentToSession: {
           value: commentToSession,
           type: "string",
           required: false,
         },
-        rating: { value: rating, type: "number", required: false },
+        rating: { value: rating, type: "numeric", required: false },
       });
 
       // 2. Prepare record
