@@ -1,8 +1,8 @@
-import { IvsClient } from "@aws-sdk/client-ivs";
+const { IvsClient } = require("@aws-sdk/client-ivs");
 
 let cachedClient = null;
 
-export default function getIvsClient() {
+function getIvsClient() {
   if (cachedClient) return cachedClient;
 
   cachedClient = new IvsClient({
@@ -15,3 +15,4 @@ export default function getIvsClient() {
 
   return cachedClient;
 }
+module.exports = getIvsClient;

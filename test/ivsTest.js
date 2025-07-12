@@ -1,14 +1,16 @@
-import dotenv from "dotenv";
-import ScyllaDb from "../ScyllaDb.js";
-import IVSService from "../ivs/ivs.js";
-import getIvsClient from "../ivs/ivsClient.js";
-import logEvent from "../utils/logEvent.js";
-import {
+const dotenv = require("dotenv");
+const ScyllaDb = require("../ScyllaDb");
+const IVSService = require("../ivs/ivs");
+const getIvsClient = require("../ivs/ivsClient");
+const logEvent = require("../utils/logEvent");
+const ErrorHandler = require("../utils/ErrorHandler");
+
+const {
   CreateChannelCommand,
   CreateStreamKeyCommand,
-  DeleteStreamKeyCommand, // ✅
-  ListStreamKeysCommand, // ✅
-} from "@aws-sdk/client-ivs";
+  DeleteStreamKeyCommand,
+  ListStreamKeysCommand,
+} = require("@aws-sdk/client-ivs");
 
 dotenv.config();
 
@@ -99,24 +101,130 @@ async function runAllTests() {
 }
 // test for creating streams
 async function testCreateStream() {
+  ErrorHandler.clear();
   logTest("createStream");
 
+  // 1. Valid open_public stream
+  logTest("Valid open_public stream");
   try {
     const { channel, streamKey } = await createChannelWithStreamKey();
-
-    testStream = await IVSService.createStream({
+    const stream = await IVSService.createStream({
       creator_user_id: "user001",
       channel_id: channel.arn,
-      title: "Test Stream",
+      title: "Test Stream 1",
       stream_key: streamKey.value,
-      access_type: "open_public", // ✅ required and must include "open"
+      access_type: "open_public",
+    });
+    logSuccess(`✅ Stream created: ${stream.id}`);
+  } catch (e) {
+    logError("❌ Failed to create valid stream", e.message);
+  }
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
+
+  // 2. Missing stream key (should fail)
+  logTest("Missing stream_key (should fail)");
+  try {
+    const { channel } = await createChannelWithStreamKey();
+    await IVSService.createStream({
+      creator_user_id: "user002",
+      channel_id: channel.arn,
+      title: "Test Stream 2",
+      access_type: "open_public",
+    });
+    logError("❌ Should have failed (missing stream_key)");
+  } catch (e) {
+    logSuccess("✅ Correctly failed (missing stream_key): " + e.message);
+  }
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
+
+  // 3. Invalid access type (should fail)
+  logTest("Invalid access_type (should fail)");
+  try {
+    const { channel, streamKey } = await createChannelWithStreamKey();
+    await IVSService.createStream({
+      creator_user_id: "user003",
+      channel_id: channel.arn,
+      title: "Invalid Access",
+      stream_key: streamKey.value,
+      access_type: "invalid_type",
+    });
+    logError("❌ Should have failed (invalid access_type)");
+  } catch (e) {
+    logSuccess("✅ Correctly failed (invalid access_type): " + e.message);
+  }
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
+
+  // 4. Missing creator_user_id (should fail)
+  logTest("Missing creator_user_id (should fail)");
+  try {
+    const { channel, streamKey } = await createChannelWithStreamKey();
+    await IVSService.createStream({
+      channel_id: channel.arn,
+      title: "No Creator",
+      stream_key: streamKey.value,
+      access_type: "open_public",
+    });
+    logError("❌ Should have failed (missing creator_user_id)");
+  } catch (e) {
+    logSuccess("✅ Correctly failed (missing creator_user_id): " + e.message);
+  }
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
+
+  // 5. Missing title (should fail)
+  logTest("Missing title (should fail)");
+  try {
+    const { channel, streamKey } = await createChannelWithStreamKey();
+    await IVSService.createStream({
+      creator_user_id: "user005",
+      channel_id: channel.arn,
+      stream_key: streamKey.value,
+      access_type: "open_public",
+    });
+    logError("❌ Should have failed (missing title)");
+  } catch (e) {
+    logSuccess("✅ Correctly failed (missing title): " + e.message);
+  }
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
+
+  // 6. Valid stream with private access
+  logTest("Valid private stream");
+  try {
+    const { channel, streamKey } = await createChannelWithStreamKey();
+    const stream = await IVSService.createStream({
+      creator_user_id: "user006",
+      channel_id: channel.arn,
+      title: "Private Stream",
+      stream_key: streamKey.value,
+      access_type: "private",
+    });
+    logSuccess(`✅ Private stream created: ${stream.id}`);
+  } catch (e) {
+    logError("❌ Failed to create private stream", e.message);
+  }
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
+
+  // 7. Simulate AWS SDK failure
+  logTest("Simulate AWS region failure");
+  try {
+    const originalRegion = process.env.AWS_REGION;
+    process.env.AWS_REGION = "invalid-region";
+
+    const { channel, streamKey } = await createChannelWithStreamKey();
+    await IVSService.createStream({
+      creator_user_id: "user007",
+      channel_id: channel.arn,
+      title: "AWS Fail",
+      stream_key: streamKey.value,
+      access_type: "open_public",
     });
 
-    if (testStream && testStream.id) logSuccess("Stream created successfully");
-    else throw new Error("No stream returned");
-  } catch (err) {
-    logError("createStream failed", err);
+    logError("❌ Unexpected success in invalid AWS region");
+    process.env.AWS_REGION = originalRegion;
+  } catch (e) {
+    logSuccess("✅ Correctly failed AWS SDK region issue: " + e.message);
+    process.env.AWS_REGION = "us-east-1";
   }
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
 }
 
 async function testUpdateChannel() {

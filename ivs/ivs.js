@@ -1,52 +1,85 @@
 // IVSService.js
-import {
+const {
   CreateChannelCommand,
   CreateStreamKeyCommand,
-  DeleteStreamKeyCommand, // ✅
-  ListStreamKeysCommand, // ✅
+  DeleteStreamKeyCommand,
+  ListStreamKeysCommand,
   DeleteChannelCommand,
   ListChannelsCommand,
   GetChannelCommand,
-} from "@aws-sdk/client-ivs";
-import getIvsClient from "./ivsClient.js"; // ✅ This correctly imports the default
-import logEvent from "../utils/logEvent.js";
-import logError from "../utils/logError.js";
-import ScyllaDb from "../ScyllaDb.js";
+} = require("@aws-sdk/client-ivs");
+
+const getIvsClient = require("./ivsClient");
+const logEvent = require("../utils/logEvent");
+const logError = require("../utils/logError");
+const ScyllaDb = require("../ScyllaDb");
+const SafeUtils = require("../utils/SafeUtils");
+const ErrorHandler = require("../utils/ErrorHandler");
 
 const STREAMS_TABLE = "IVSStreams";
 const JOIN_LOGS_TABLE = "IVSJoinLogs";
 const STATS_TABLE = "IVSStats";
 const CHANNELS_TABLE = "IVSChannels";
 
-export default class IVSService {
-  static async createStream({
-    creator_user_id,
-    title,
-    access_type,
-    is_private = false,
-    pricing_type = "free",
-    description = "",
-    tags = [],
-    allow_comments = true,
-    collaborators = [],
-  }) {
-    const id = crypto.randomUUID();
-    const now = new Date().toISOString();
-
-    let awsChannel, streamKey;
-
+class IVSService {
+  static async createStream(rawArgs) {
     try {
+      // ✅ Step 1: Validate & Sanitize Inputs
+      const params = SafeUtils.sanitizeValidate({
+        creator_user_id: {
+          value: rawArgs.creator_user_id,
+          type: "string",
+          required: true,
+        },
+        title: { value: rawArgs.title, type: "string", required: true },
+        access_type: {
+          value: rawArgs.access_type,
+          type: "string",
+          required: true,
+        },
+        is_private: {
+          value: rawArgs.is_private,
+          type: "boolean",
+          default: false,
+        },
+        pricing_type: {
+          value: rawArgs.pricing_type,
+          type: "string",
+          default: "free",
+        },
+        description: {
+          value: rawArgs.description,
+          type: "string",
+          default: "",
+        },
+        tags: { value: rawArgs.tags, type: "array", default: [] },
+        allow_comments: {
+          value: rawArgs.allow_comments,
+          type: "boolean",
+          default: true,
+        },
+        collaborators: {
+          value: rawArgs.collaborators,
+          type: "array",
+          default: [],
+        },
+      });
+
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
       const ivsClient = getIvsClient();
 
+      // ✅ Step 2: Create Channel
       const channelRes = await ivsClient.send(
         new CreateChannelCommand({
-          name: `channel-${creator_user_id}-${Date.now()}`,
+          name: `channel-${params.creator_user_id}-${Date.now()}`,
           latencyMode: "LOW",
           type: "STANDARD",
         })
       );
-      console.log("channel id ", channelRes.channel.arn);
-      awsChannel = channelRes.channel;
+      const awsChannel = channelRes.channel;
+
+      // ✅ Step 3: Clean old keys
       const existingKeys = await ivsClient.send(
         new ListStreamKeysCommand({ channelArn: awsChannel.arn })
       );
@@ -54,19 +87,19 @@ export default class IVSService {
         await ivsClient.send(new DeleteStreamKeyCommand({ arn: key.arn }));
       }
 
+      // ✅ Step 4: Create Stream Key
       const keyRes = await ivsClient.send(
-        new CreateStreamKeyCommand({
-          channelArn: awsChannel.arn,
-        })
+        new CreateStreamKeyCommand({ channelArn: awsChannel.arn })
       );
-      streamKey = keyRes.streamKey;
+      const streamKey = keyRes.streamKey;
 
+      // ✅ Step 5: Store channel in DB
       await ScyllaDb.putItem(CHANNELS_TABLE, {
-        id: creator_user_id,
+        id: params.creator_user_id,
         name: awsChannel.name,
-        description,
+        description: params.description,
         profile_thumbnail: "",
-        tags,
+        tags: params.tags,
         language: "",
         category: "",
         followers: 0,
@@ -75,47 +108,50 @@ export default class IVSService {
         created_at: now,
         updated_at: now,
       });
+
+      // ✅ Step 6: Store stream in DB
+      const item = {
+        id,
+        channel_id: awsChannel.arn,
+        creator_user_id: params.creator_user_id,
+        title: params.title,
+        description: params.description,
+        access_type: params.access_type,
+        is_private: params.is_private,
+        pricing_type: params.pricing_type,
+        allow_comments: params.allow_comments,
+        collaborators: params.collaborators,
+        tags: params.tags,
+        goals: [],
+        games: [],
+        gifts: [],
+        tips: [],
+        multi_cam_urls: [],
+        announcements: [],
+        status: "offline",
+        created_at: now,
+        updated_at: now,
+        stream_key: streamKey.value,
+      };
+
+      await ScyllaDb.putItem(STREAMS_TABLE, item);
+      logEvent("createStream", {
+        stream_id: id,
+        creator_user_id: params.creator_user_id,
+        channel_id: awsChannel.arn,
+      });
+
+      return {
+        ...item,
+        ingest_endpoint: awsChannel.ingestEndpoint,
+        playback_url: awsChannel.playbackUrl,
+      };
     } catch (err) {
-      logError(err, { creator_user_id });
-      throw new Error("Failed to create IVS channel or stream key");
+      ErrorHandler.add_error(err.message, { method: "createStream" });
+      // Optional: still throw to bubble up or return false/null
+      // throw err;
+      return null;
     }
-
-    const item = {
-      id,
-      channel_id: awsChannel.arn,
-      creator_user_id,
-      title,
-      description,
-      access_type,
-      is_private,
-      pricing_type,
-      allow_comments,
-      collaborators,
-      tags,
-      goals: [],
-      games: [],
-      gifts: [],
-      tips: [],
-      multi_cam_urls: [],
-      announcements: [],
-      status: "offline",
-      created_at: now,
-      updated_at: now,
-      stream_key: streamKey.value,
-    };
-
-    await ScyllaDb.putItem(STREAMS_TABLE, item);
-    logEvent("createStream", {
-      stream_id: id,
-      creator_user_id,
-      channel_id: awsChannel.arn,
-    });
-
-    return {
-      ...item,
-      ingest_endpoint: awsChannel.ingestEndpoint,
-      playback_url: awsChannel.playbackUrl,
-    };
   }
 
   static async getChannelMeta(channel_id) {
@@ -224,3 +260,5 @@ export default class IVSService {
     }
   }
 }
+
+module.exports = IVSService;
