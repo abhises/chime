@@ -85,11 +85,15 @@ async function runAllTests() {
     await testCreateStream();
     await testUpdateChannel();
     await testCreateStreamWithoutUserId();
+
     await testDuplicateStreamKey();
     await testListChannelStreams();
     await testGetChannelMeta();
+
     await testDeleteChannel();
+
     await testListAllChannels();
+
     await testCountAllChannels();
     await testChannelExists();
     await testValidateChannel();
@@ -228,12 +232,14 @@ async function testCreateStream() {
 }
 
 async function testUpdateChannel() {
+  ErrorHandler.clear();
   logTest("updateChannel");
 
+  // 1. Valid update
+  logTest("Valid update");
   try {
-    const { channel, streamKey } = await createChannelWithStreamKey();
+    const { channel } = await createChannelWithStreamKey();
 
-    // Step 1: Insert initial channel into DB
     const initialChannel = {
       id: channel.arn,
       name: "Initial Channel",
@@ -251,17 +257,14 @@ async function testUpdateChannel() {
 
     await ScyllaDb.putItem(CHANNELS_TABLE, initialChannel);
 
-    // Step 2: Prepare update data
     const updates = {
       description: "Updated description",
       category: "gaming",
       language: "hi",
     };
 
-    // Step 3: Call updateChannel
     await IVSService.updateChannel(channel.arn, updates);
 
-    // Step 4: Validate that it was updated
     const updatedChannel = await ScyllaDb.getItem(CHANNELS_TABLE, {
       id: channel.arn,
     });
@@ -272,65 +275,179 @@ async function testUpdateChannel() {
       updatedChannel.language === updates.language;
 
     if (isUpdated) {
-      logSuccess("Channel updated successfully");
+      logSuccess("✅ Channel updated successfully");
     } else {
-      logError(
-        "Channel fields did not update as expected",
-        new Error(JSON.stringify(updatedChannel))
-      );
+      const msg = "❌ Channel fields did not update as expected";
+      ErrorHandler.add_error(msg, updatedChannel);
+      logError(msg, new Error(JSON.stringify(updatedChannel)));
     }
   } catch (err) {
-    logError("updateChannel test failed", err);
+    ErrorHandler.add_error(err.message, { method: "updateChannel" });
+    logError("❌ updateChannel test failed", err);
   }
+
+  // 2. Update with missing channel ARN (should fail)
+  logTest("Missing channel ARN (should fail)");
+  try {
+    await IVSService.updateChannel(null, {
+      description: "Fail case",
+    });
+    logError("❌ Should have failed due to missing channel ARN");
+  } catch (err) {
+    logSuccess(
+      "✅ Correctly failed due to missing channel ARN: " + err.message
+    );
+    ErrorHandler.add_error(err.message, { method: "updateChannel" });
+  }
+
+  // 3. Update non-existent channel (should fail)
+  logTest("Non-existent channel ARN (should fail)");
+  try {
+    await IVSService.updateChannel(
+      "arn:aws:ivs:us-east-1:000000000000:channel/non-existent",
+      {
+        description: "Should not update",
+      }
+    );
+    logError("❌ Should have failed with non-existent channel ARN");
+  } catch (err) {
+    logSuccess("✅ Correctly failed on non-existent channel: " + err.message);
+    ErrorHandler.add_error(err.message, { method: "updateChannel" });
+  }
+
+  // Final error output
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
 }
 
 async function testCreateStreamWithoutUserId() {
-  logTest("createStream (Missing creator_user_id)");
+  ErrorHandler.clear();
+  logTest("createStreamWithoutUserId");
 
+  // 1. Missing creator_user_id (should fail)
+  logTest("Missing creator_user_id (should fail)");
   try {
     await IVSService.createStream({
-      creator_user_id: null, // ❌
+      creator_user_id: null,
       title: "Invalid Test Stream",
       access_type: "public",
     });
-    logError(
-      "Expected error when creator_user_id is missing",
-      new Error("No error thrown")
-    );
+
+    const msg = "❌ No error thrown when creator_user_id was null";
+    ErrorHandler.add_error(msg, { method: "createStream" });
+    logError("Expected error when creator_user_id is missing", new Error(msg));
   } catch (error) {
-    logSuccess("Properly failed when creator_user_id is missing");
+    logSuccess("✅ Properly failed when creator_user_id is missing");
+    ErrorHandler.add_error(error.message, { method: "createStream" });
   }
+
+  // 2. Missing title (should fail)
+  logTest("Missing title (should fail)");
+  try {
+    await IVSService.createStream({
+      creator_user_id: "userTest",
+      access_type: "public",
+    });
+
+    const msg = "❌ No error thrown when title was missing";
+    ErrorHandler.add_error(msg, { method: "createStream" });
+    logError("Expected error when title is missing", new Error(msg));
+  } catch (error) {
+    logSuccess("✅ Properly failed when title is missing");
+    ErrorHandler.add_error(error.message, { method: "createStream" });
+  }
+
+  // 3. Missing access_type (should fail)
+  logTest("Missing access_type (should fail)");
+  try {
+    await IVSService.createStream({
+      creator_user_id: "userTest",
+      title: "Missing Access Type",
+    });
+
+    const msg = "❌ No error thrown when access_type was missing";
+    ErrorHandler.add_error(msg, { method: "createStream" });
+    logError("Expected error when access_type is missing", new Error(msg));
+  } catch (error) {
+    logSuccess("✅ Properly failed when access_type is missing");
+    ErrorHandler.add_error(error.message, { method: "createStream" });
+  }
+
+  // Final error output
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
 }
 
 async function testDuplicateStreamKey() {
+  ErrorHandler.clear();
   logTest("createStream (Duplicate Stream Key)");
 
+  // 1. Create first valid stream
+  logTest("Creating first valid stream");
   try {
-    const first = await IVSService.createStream({
-      creator_user_id: testCreatorId,
+    const { channel, streamKey } = await createChannelWithStreamKey();
+
+    const firstStream = await IVSService.createStream({
+      creator_user_id: "user_duplicate",
+      channel_id: channel.arn,
       title: "First Stream",
+      stream_key: streamKey.value,
       access_type: "public",
     });
 
-    // Try again without deleting previous keys (simulate quota exceed)
-    const second = await IVSService.createStream({
-      creator_user_id: testCreatorId,
-      title: "Second Stream",
-      access_type: "public",
-    });
+    logSuccess(`✅ First stream created: ${firstStream.id}`);
 
-    logSuccess("Both streams created (unexpected, unless cleanup happened)");
-  } catch (error) {
-    if (error.message.includes("quota")) {
-      logSuccess("Correctly failed on duplicate stream key quota");
-    } else {
-      logError("Unexpected error during duplicate stream test", error);
+    // 2. Try to create second stream with same creator (simulate quota exceed or key conflict)
+    logTest("Creating second stream with same user (simulate quota)");
+
+    try {
+      await IVSService.createStream({
+        creator_user_id: "user_duplicate",
+        channel_id: channel.arn,
+        title: "Second Stream",
+        stream_key: streamKey.value, // re-using the same stream key
+        access_type: "public",
+      });
+
+      const msg = "❌ Duplicate stream key accepted unexpectedly";
+      ErrorHandler.add_error(msg, { method: "createStream" });
+      logError(msg, new Error("Quota/Key conflict not triggered"));
+    } catch (e2) {
+      if (
+        e2.message.toLowerCase().includes("quota") ||
+        e2.message.toLowerCase().includes("duplicate")
+      ) {
+        logSuccess(
+          "✅ Correctly failed on duplicate stream key or quota limit: " +
+            e2.message
+        );
+        ErrorHandler.add_error(e2.message, { method: "createStream" });
+      } else {
+        const msg = "❌ Unexpected error on duplicate stream";
+        ErrorHandler.add_error(e2.message, {
+          method: "createStream",
+          details: "Expected quota/duplicate issue",
+        });
+        logError(msg, e2);
+      }
     }
+  } catch (err) {
+    const msg = "❌ Failed to create first stream";
+    ErrorHandler.add_error(err.message, {
+      method: "createStream",
+      step: "initial",
+    });
+    logError(msg, err);
   }
+
+  // Final error report
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
 }
 
 async function testListChannelStreams() {
+  ErrorHandler.clear();
   logTest("listChannelStreams");
+
+  // 1. Create channel and add a stream, then list streams
+  logTest("Create channel, add stream, then list streams");
 
   try {
     const now = new Date().toISOString();
@@ -346,7 +463,7 @@ async function testListChannelStreams() {
     );
 
     const awsChannel = channelRes.channel;
-    console.log("✅ Created channel with ARN:", awsChannel.arn);
+    logSuccess(`✅ Created channel with ARN: ${awsChannel.arn}`);
 
     // Step 2: Clean old stream keys
     const existingKeys = await ivsClient.send(
@@ -356,16 +473,14 @@ async function testListChannelStreams() {
       await ivsClient.send(new DeleteStreamKeyCommand({ arn: key.arn }));
     }
 
-    // Step 3: Create a new stream key
+    // Step 3: Create new stream key
     const keyRes = await ivsClient.send(
-      new CreateStreamKeyCommand({
-        channelArn: awsChannel.arn,
-      })
+      new CreateStreamKeyCommand({ channelArn: awsChannel.arn })
     );
     const streamKey = keyRes.streamKey;
 
-    // Step 4: Store metadata in DB
-    const id = crypto.randomUUID(); // ✅ generate stream ID
+    // Step 4: Store stream metadata in DB
+    const id = crypto.randomUUID();
     const item = {
       id,
       channel_id: awsChannel.arn,
@@ -398,98 +513,131 @@ async function testListChannelStreams() {
       channel_id: awsChannel.arn,
     });
 
-    // Step 5: Call listChannelStreams
+    // Step 5: Call the function to list streams
     const streams = await IVSService.listChannelStreams(awsChannel.arn);
 
     if (Array.isArray(streams)) {
-      console.log("   ▶️ Found", streams.length, "stream(s)");
-      logSuccess("listChannelStreams returned a valid array");
+      logSuccess(
+        `✅ listChannelStreams returned an array with ${streams.length} stream(s)`
+      );
     } else {
-      logError("Expected array but got something else", new Error());
+      const msg = "❌ listChannelStreams did not return an array";
+      ErrorHandler.add_error(msg, { method: "listChannelStreams" });
+      logError(msg, new Error("Invalid return type"));
     }
   } catch (error) {
-    logError("listChannelStreams test failed", error);
+    ErrorHandler.add_error(error.message, { method: "listChannelStreams" });
+    logError("❌ listChannelStreams test failed", error);
   }
+
+  // Optional: Test invalid channel ARN (should fail)
+  logTest("Invalid channel ARN (should fail)");
+  try {
+    await IVSService.listChannelStreams(null);
+    const msg = "❌ Should have failed due to null channel ARN";
+    ErrorHandler.add_error(msg, { method: "listChannelStreams" });
+    logError(msg, new Error("No error thrown for null channel ARN"));
+  } catch (e) {
+    logSuccess(`✅ Correctly failed for null channel ARN: ${e.message}`);
+    ErrorHandler.add_error(e.message, { method: "listChannelStreams" });
+  }
+
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
 }
+
 async function testGetChannelMeta() {
+  ErrorHandler.clear();
   logTest("getChannelMeta");
+
+  // 1. Create channel, save to DB, then fetch metadata
+  logTest("Create channel, save to DB, then get metadata");
 
   try {
     const now = new Date().toISOString();
+    const ivsClient = getIvsClient();
 
-    let awsChannel, streamKey;
+    // Create IVS channel
+    const channelRes = await ivsClient.send(
+      new CreateChannelCommand({
+        name: `channel-${crypto.randomUUID()}`,
+        latencyMode: "LOW",
+        type: "STANDARD",
+      })
+    );
+    const awsChannel = channelRes.channel;
+    logSuccess(`✅ Created Channel ARN: ${awsChannel.arn}`);
 
-    try {
-      const ivsClient = getIvsClient();
-
-      // Create channel
-      const channelRes = await ivsClient.send(
-        new CreateChannelCommand({
-          name: `channel-${crypto.randomUUID()}`,
-          latencyMode: "LOW",
-          type: "STANDARD",
-        })
-      );
-
-      awsChannel = channelRes.channel;
-      console.log("✅ Created Channel ARN:", awsChannel.arn);
-
-      // Clean up any existing stream keys
-      const existingKeys = await ivsClient.send(
-        new ListStreamKeysCommand({ channelArn: awsChannel.arn })
-      );
-
-      for (const key of existingKeys.streamKeys || []) {
-        await ivsClient.send(new DeleteStreamKeyCommand({ arn: key.arn }));
-      }
-
-      // Create new stream key
-      const keyRes = await ivsClient.send(
-        new CreateStreamKeyCommand({
-          channelArn: awsChannel.arn,
-        })
-      );
-
-      streamKey = keyRes.streamKey;
-
-      // Save channel to ScyllaDB
-      await ScyllaDb.putItem(CHANNELS_TABLE, {
-        id: awsChannel.arn, // ✅ using ARN as the primary key
-        name: awsChannel.name,
-        description: "",
-        profile_thumbnail: "",
-        tags: [],
-        language: "",
-        category: "",
-        followers: 0,
-        aws_channel_arn: awsChannel.arn,
-        playback_url: awsChannel.playbackUrl,
-        created_at: now,
-        updated_at: now,
-      });
-
-      // Fetch channel meta
-      const meta = await IVSService.getChannelMeta(awsChannel.arn); // ✅ pass ARN to match saved id
-
-      if (meta && meta.aws_channel_arn) {
-        console.log("   ▶️ Channel ARN:", meta.aws_channel_arn);
-        logSuccess("getChannelMeta returned metadata");
-      } else {
-        logError("getChannelMeta returned no data", new Error());
-      }
-    } catch (err) {
-      logError("IVS or DB setup failed", err);
-      throw new Error("Failed to create IVS channel or stream key");
+    // Delete existing stream keys
+    const existingKeys = await ivsClient.send(
+      new ListStreamKeysCommand({ channelArn: awsChannel.arn })
+    );
+    for (const key of existingKeys.streamKeys || []) {
+      await ivsClient.send(new DeleteStreamKeyCommand({ arn: key.arn }));
     }
-  } catch (error) {
-    logError("getChannelMeta test failed", error);
+
+    // Create new stream key
+    const keyRes = await ivsClient.send(
+      new CreateStreamKeyCommand({ channelArn: awsChannel.arn })
+    );
+    const streamKey = keyRes.streamKey;
+
+    // Save channel metadata in DB
+    await ScyllaDb.putItem(CHANNELS_TABLE, {
+      id: awsChannel.arn,
+      name: awsChannel.name,
+      description: "",
+      profile_thumbnail: "",
+      tags: [],
+      language: "",
+      category: "",
+      followers: 0,
+      aws_channel_arn: awsChannel.arn,
+      playback_url: awsChannel.playbackUrl,
+      created_at: now,
+      updated_at: now,
+    });
+
+    // Fetch channel metadata
+    const meta = await IVSService.getChannelMeta(awsChannel.arn);
+
+    if (meta && meta.aws_channel_arn === awsChannel.arn) {
+      logSuccess("✅ getChannelMeta returned valid metadata");
+    } else {
+      const msg = "❌ getChannelMeta returned invalid or no metadata";
+      ErrorHandler.add_error(msg, {
+        method: "getChannelMeta",
+        returnedMeta: meta,
+      });
+      logError(msg, new Error("Invalid metadata returned"));
+    }
+  } catch (err) {
+    ErrorHandler.add_error(err.message, { method: "getChannelMeta" });
+    logError("❌ getChannelMeta test failed", err);
   }
+
+  // 2. Test getChannelMeta with invalid ARN (should fail)
+  logTest("Invalid channel ARN (should fail)");
+  try {
+    await IVSService.getChannelMeta(null);
+    const msg = "❌ Should have failed due to null channel ARN";
+    ErrorHandler.add_error(msg, { method: "getChannelMeta" });
+    logError(msg, new Error("No error thrown for null ARN"));
+  } catch (e) {
+    logSuccess(`✅ Correctly failed for null channel ARN: ${e.message}`);
+    ErrorHandler.add_error(e.message, { method: "getChannelMeta" });
+  }
+
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
 }
+
 async function testDeleteChannel() {
+  ErrorHandler.clear();
   logTest("deleteChannel");
 
+  // 1. Create a stream and delete its channel
+  logTest("Create stream and delete its channel");
+
   try {
-    // First, create a stream to get a valid channelArn
     const stream = await IVSService.createStream({
       creator_user_id: "delete-test-user",
       title: "Temp Stream for Delete Test",
@@ -503,29 +651,50 @@ async function testDeleteChannel() {
     });
 
     const channelArn = stream.channel_id;
-    console.log("Created channel ID to delete:", channelArn);
+    console.log("✅ Created channel ARN to delete:", channelArn);
 
-    // Now try deleting the channel
     const result = await IVSService.deleteChannel(channelArn);
 
     if (result === true) {
-      logSuccess("deleteChannel successfully deleted the channel");
+      logSuccess("✅ deleteChannel successfully deleted the channel");
     } else {
-      logError("deleteChannel returned false", new Error("Failed"));
+      const msg = "❌ deleteChannel returned false, deletion failed";
+      ErrorHandler.add_error(msg, { channelArn, method: "deleteChannel" });
+      logError(msg, new Error("Deletion failed"));
     }
   } catch (error) {
-    logError("deleteChannel test failed", error);
+    ErrorHandler.add_error(error.message, { method: "deleteChannel" });
+    logError("❌ deleteChannel test failed", error);
   }
+
+  // 2. Try deleting channel with invalid ARN (should fail)
+  logTest("Delete channel with invalid ARN (should fail)");
+  try {
+    await IVSService.deleteChannel(null);
+    const msg = "❌ Should have failed due to null channel ARN";
+    ErrorHandler.add_error(msg, { method: "deleteChannel" });
+    logError(msg, new Error("No error thrown for null ARN"));
+  } catch (e) {
+    logSuccess(
+      `✅ Correctly failed to delete with null channel ARN: ${e.message}`
+    );
+    ErrorHandler.add_error(e.message, { method: "deleteChannel" });
+  }
+
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
 }
+
 async function testListAllChannels() {
+  ErrorHandler.clear();
   logTest("listAllChannels");
 
+  // 1. Should return an array of channels
+  logTest("listAllChannels returns array");
   try {
     const channels = await IVSService.listAllChannels();
 
     if (Array.isArray(channels)) {
-      logSuccess(`listAllChannels returned ${channels.length} channel(s)`);
-
+      logSuccess(`✅ listAllChannels returned ${channels.length} channel(s)`);
       if (channels.length > 0) {
         console.log("Sample channel ARNs:");
         channels.slice(0, 3).forEach((ch) => {
@@ -533,77 +702,148 @@ async function testListAllChannels() {
         });
       }
     } else {
-      logError("listAllChannels did not return an array", new Error());
+      const msg = "❌ listAllChannels did not return an array";
+      ErrorHandler.add_error(msg, {
+        method: "listAllChannels",
+        returned: channels,
+      });
+      logError(msg, new Error("Expected array"));
     }
-  } catch (error) {
-    logError("listAllChannels test failed", error);
+  } catch (e) {
+    ErrorHandler.add_error(e.message, { method: "listAllChannels" });
+    logError("❌ listAllChannels test failed", e);
   }
+
+  // 2. Simulate AWS SDK failure by setting invalid region
+  logTest("Simulate AWS SDK failure");
+  try {
+    const originalRegion = process.env.AWS_REGION;
+    process.env.AWS_REGION = "invalid-region";
+
+    await IVSService.listAllChannels();
+
+    logError("❌ Unexpected success in invalid AWS region");
+    process.env.AWS_REGION = originalRegion;
+  } catch (e) {
+    logSuccess("✅ Correctly failed AWS SDK region issue: " + e.message);
+    ErrorHandler.add_error(e.message, { method: "listAllChannels" });
+    process.env.AWS_REGION = "us-east-1";
+  }
+
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
 }
+
 async function testCountAllChannels() {
+  ErrorHandler.clear();
   logTest("countAllChannels");
 
+  // 1. Should return a number and match listAllChannels length
+  logTest("countAllChannels returns a number and matches listAllChannels");
   try {
     const count = await IVSService.countAllChannels();
 
     if (typeof count === "number") {
-      logSuccess(`countAllChannels returned count: ${count}`);
+      logSuccess(`✅ countAllChannels returned count: ${count}`);
 
-      // Optionally validate against listAllChannels
       const allChannels = await IVSService.listAllChannels();
+
       if (count === allChannels.length) {
-        logSuccess("countAllChannels matches listAllChannels length");
+        logSuccess("✅ countAllChannels matches listAllChannels length");
       } else {
-        logError(
-          "countAllChannels does not match listAllChannels",
-          new Error(`Expected ${allChannels.length}, got ${count}`)
-        );
+        const msg = `❌ countAllChannels (${count}) does not match listAllChannels length (${allChannels.length})`;
+        ErrorHandler.add_error(msg, { count, listLength: allChannels.length });
+        logError(msg, new Error(msg));
       }
     } else {
-      logError("countAllChannels did not return a number", new Error());
+      const msg = "❌ countAllChannels did not return a number";
+      ErrorHandler.add_error(msg, { returnedType: typeof count });
+      logError(msg, new Error(msg));
     }
-  } catch (error) {
-    logError("countAllChannels test failed", error);
+  } catch (err) {
+    ErrorHandler.add_error(err.message, { method: "countAllChannels" });
+    logError("❌ countAllChannels test failed", err);
   }
+
+  // 2. Simulate failure case (e.g., invalid AWS region)
+  logTest("Simulate failure with invalid AWS region");
+  try {
+    const originalRegion = process.env.AWS_REGION;
+    process.env.AWS_REGION = "invalid-region";
+
+    await IVSService.countAllChannels();
+
+    logError("❌ Unexpected success with invalid AWS region");
+    process.env.AWS_REGION = originalRegion;
+  } catch (err) {
+    logSuccess("✅ Correctly failed due to invalid AWS region: " + err.message);
+    ErrorHandler.add_error(err.message, { method: "countAllChannels" });
+    process.env.AWS_REGION = "us-east-1";
+  }
+
+  // Output all errors at the end
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
 }
 
 async function testChannelExists() {
+  ErrorHandler.clear();
   logTest("channelExists");
 
   const existingChannelArn =
-    "arn:aws:ivs:us-east-1:701253760804:channel/7GOkYUVpMTLP"; // replace with your actual channel ARN
+    "arn:aws:ivs:us-east-1:701253760804:channel/7GOkYUVpMTLP"; // replace with a real channel ARN
   const fakeChannelArn =
     "arn:aws:ivs:us-east-1:123456789012:channel/fakeChannelXYZ";
 
+  // 1. Check known existing channel
+  logTest("Check existing channel");
   try {
-    // Check known existing channel
     const exists = await IVSService.channelExists(existingChannelArn);
     if (exists) {
-      logSuccess("channelExists correctly identified existing channel");
+      logSuccess("✅ channelExists correctly identified existing channel");
     } else {
-      logError(
-        "channelExists returned false for existing channel",
-        new Error()
-      );
+      const msg = "❌ channelExists returned false for existing channel";
+      ErrorHandler.add_error(msg, { arn: existingChannelArn });
+      logError(msg, new Error(msg));
     }
-
-    // Check non-existing channel
-    const notExists = await IVSService.channelExists(fakeChannelArn);
-    if (!notExists) {
-      logSuccess(
-        "channelExists correctly returned false for non-existing channel"
-      );
-    } else {
-      logError(
-        "channelExists returned true for non-existing channel",
-        new Error()
-      );
-    }
-  } catch (error) {
-    logError("channelExists test failed", error);
+  } catch (e) {
+    ErrorHandler.add_error(e.message, { method: "channelExists" });
+    logError("❌ channelExists test failed on existing channel", e);
   }
+
+  // 2. Check non-existing channel
+  logTest("Check non-existing channel");
+  try {
+    const exists = await IVSService.channelExists(fakeChannelArn);
+    if (!exists) {
+      logSuccess(
+        "✅ channelExists correctly returned false for non-existing channel"
+      );
+    } else {
+      const msg = "❌ channelExists returned true for non-existing channel";
+      ErrorHandler.add_error(msg, { arn: fakeChannelArn });
+      logError(msg, new Error(msg));
+    }
+  } catch (e) {
+    ErrorHandler.add_error(e.message, { method: "channelExists" });
+    logError("❌ channelExists test failed on non-existing channel", e);
+  }
+
+  // 3. Invalid ARN (should fail)
+  logTest("Invalid channel ARN (should fail)");
+  try {
+    await IVSService.channelExists(null);
+    const msg = "❌ Should have failed due to null channel ARN";
+    ErrorHandler.add_error(msg, { method: "channelExists" });
+    logError(msg, new Error(msg));
+  } catch (e) {
+    logSuccess("✅ Correctly failed for null channel ARN: " + e.message);
+    ErrorHandler.add_error(e.message, { method: "channelExists" });
+  }
+
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
 }
 
 async function testValidateChannel() {
+  ErrorHandler.clear();
   logTest("validateChannel");
 
   const validChannelArn =
@@ -611,34 +851,62 @@ async function testValidateChannel() {
   const invalidChannelArn =
     "arn:aws:ivs:us-east-1:123456789012:channel/nonexistentXYZ";
 
+  // 1. Validate known valid channel ARN
+  logTest("Validate known valid channel ARN");
   try {
-    // ✅ Test valid channel
     const validResult = await IVSService.validateChannel(validChannelArn);
     if (validResult.valid) {
-      logSuccess("validateChannel correctly validated a real channel");
+      logSuccess("✅ validateChannel correctly validated a real channel");
     } else {
-      logError(
-        "validateChannel failed for a real channel",
-        new Error(validResult.reason)
-      );
+      const msg = `❌ validateChannel failed for a real channel: ${validResult.reason}`;
+      ErrorHandler.add_error(msg, {
+        arn: validChannelArn,
+        result: validResult,
+      });
+      logError(msg, new Error(validResult.reason));
     }
+  } catch (e) {
+    ErrorHandler.add_error(e.message, { method: "validateChannel" });
+    logError("❌ validateChannel test failed on valid channel", e);
+  }
 
-    // ❌ Test non-existent channel
+  // 2. Validate known invalid/non-existent channel ARN
+  logTest("Validate known invalid/non-existent channel ARN");
+  try {
     const invalidResult = await IVSService.validateChannel(invalidChannelArn);
     if (
       !invalidResult.valid &&
       invalidResult.reason === "Channel does not exist"
     ) {
-      logSuccess("validateChannel correctly identified a non-existing channel");
-    } else {
-      logError(
-        "validateChannel did not handle non-existing channel properly",
-        new Error(invalidResult.reason)
+      logSuccess(
+        "✅ validateChannel correctly identified a non-existing channel"
       );
+    } else {
+      const msg = `❌ validateChannel did not handle non-existing channel properly: ${invalidResult.reason}`;
+      ErrorHandler.add_error(msg, {
+        arn: invalidChannelArn,
+        result: invalidResult,
+      });
+      logError(msg, new Error(invalidResult.reason));
     }
-  } catch (error) {
-    logError("validateChannel test failed", error);
+  } catch (e) {
+    ErrorHandler.add_error(e.message, { method: "validateChannel" });
+    logError("❌ validateChannel test failed on invalid channel", e);
   }
+
+  // 3. Validate with invalid input (null or empty ARN)
+  logTest("Validate with null channel ARN (should fail)");
+  try {
+    await IVSService.validateChannel(null);
+    const msg = "❌ Should have failed due to null channel ARN";
+    ErrorHandler.add_error(msg, { method: "validateChannel" });
+    logError(msg, new Error(msg));
+  } catch (e) {
+    logSuccess("✅ Correctly failed for null channel ARN: " + e.message);
+    ErrorHandler.add_error(e.message, { method: "validateChannel" });
+  }
+
+  console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
 }
 
 runAllTests();
