@@ -60,17 +60,16 @@ async function testCreateMeeting() {
   logTest("createMeeting");
   console.log("Current AWS Region:", process.env.AWS_REGION);
 
-  // 1. Basic meeting
-  logTest("Basic meeting");
   try {
-    const res = await Chime.createMeeting({
-      title: "Bad Type",
-      creatorUserId: "user007",
-      type: "nonsense_type",
+    const meeting = await Chime.createMeeting({
+      title: "Block Test",
+      creatorUserId: "hostBlock",
     });
-    console.log("✅ Unexpected success (invalid type)", res.MeetingId);
+    await Chime.blockAttendee(meeting.MeetingId, "badGuy");
+    await Chime.addAttendee(meeting.MeetingId, "badGuy");
+    console.log("❌ Blocked user should not be added");
   } catch (e) {
-    console.log("✅ Expected fail (invalid type):", e.message);
+    logTest("✅ Blocked user rejected: " + e.message);
   }
   console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
 }
