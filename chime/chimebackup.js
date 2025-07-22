@@ -115,7 +115,7 @@ export default class Chime {
           ExternalMeetingId: params.title,
         })
       );
-      console.log("checking response", resp);
+
       const meetingId = resp?.Meeting?.MeetingId;
       if (!meetingId) throw new Error("Chime SDK failed to create meeting");
 
@@ -140,43 +140,35 @@ export default class Chime {
       await ScyllaDb.putItem(MEETINGS_TABLE, item);
       logEvent("createMeeting", item);
 
-      Logger.writeLog({
-        flag: "CHIME_CREATE_MEETING",
-        action: "createMeeting",
-        message: `Meeting created successfully for user ${params.creatorUserId}`,
-        data: item,
-      });
-
       return item;
     } catch (err) {
       ErrorHandler.add_error(err.message, { method: "createMeeting" });
 
-      Logger.writeLog({
-        flag: "CHIME_CREATE_ERROR",
-        action: "createMeeting",
-        message: err.message,
-        data: { title, creatorUserId },
-        critical: true,
-      });
-
-      return null;
+      // logError(err, { method: "createMeeting" });
+      // throw err;
     }
   }
-
   static async getMeeting(meetingId) {
     try {
+      // Validate meetingId: required string
       const params = SafeUtils.sanitizeValidate({
         meetingId: { value: meetingId, type: "string", required: true },
       });
 
-      const cached = await redis.get(`meeting:${params.meetingId}`);
-      if (cached) return JSON.parse(cached);
+      if (!params.meetingId) {
+        throw new Error("Invalid meetingId parameter");
+      }
+
+      if (redis) {
+        const cached = await redis.get(`meeting:${params.meetingId}`);
+        if (cached) return JSON.parse(cached);
+      }
 
       const item = await ScyllaDb.getItem(MEETINGS_TABLE, {
         MeetingId: params.meetingId,
       });
 
-      if (item) {
+      if (redis && item) {
         await redis.set(
           `meeting:${params.meetingId}`,
           JSON.stringify(item),
@@ -185,39 +177,30 @@ export default class Chime {
         );
       }
 
-      Logger.writeLog({
-        flag: "CHIME_GET_MEETING",
-        action: "getMeeting",
-        message: `Meeting retrieved successfully for ID ${params.meetingId}`,
-        data: item,
-      });
-
+      logEvent("getMeeting", { meetingId: params.meetingId });
       return item;
     } catch (err) {
       ErrorHandler.add_error(err.message, { method: "getMeeting", meetingId });
-
-      Logger.writeLog({
-        flag: "CHIME_GET_ERROR",
-        action: "getMeeting",
-        message: err.message,
-        data: { meetingId },
-        critical: true,
-      });
-
+      // You can either:
+      // 1) re-throw: throw err;
+      // 2) or return null/fallback value
       return null;
     }
   }
 
   static async canJoinMeeting(meetingId, userId) {
     try {
+      // 1. Sanitize and validate inputs
       const params = SafeUtils.sanitizeValidate({
         meetingId: { value: meetingId, type: "string", required: true },
         userId: { value: userId, type: "string", required: true },
       });
 
+      // 2. Load meeting
       const meeting = await this.getMeeting(params.meetingId);
       if (!meeting) throw new Error("Meeting does not exist");
 
+      // 3. Blocked user check
       if (
         Array.isArray(meeting.BlockedAttendeeIds) &&
         meeting.BlockedAttendeeIds.includes(params.userId)
@@ -225,12 +208,14 @@ export default class Chime {
         throw new Error("Permission Denied – user blocked from joining");
       }
 
+      // 4. Get attendees from DB
       const attendees = await ScyllaDb.query(
         ATTENDEES_TABLE,
         "MeetingId = :m",
         { ":m": params.meetingId }
       );
 
+      // 5. Check if user already joined
       const alreadyJoined = attendees.find(
         (a) => a.UserId === params.userId && a.LeftAt === undefined
       );
@@ -238,48 +223,34 @@ export default class Chime {
         throw new Error("User already joined");
       }
 
-      const allowed = attendees.length < MAX_ATTENDEES;
-
-      Logger.writeLog({
-        flag: "CHIME_CAN_JOIN_MEETING",
-        action: "canJoinMeeting",
-        message: `Checked join permission for user ${params.userId}`,
-        data: { meetingId: params.meetingId, allowed },
-      });
-
-      return allowed;
+      // 6. Check for max capacity
+      return attendees.length < MAX_ATTENDEES;
     } catch (err) {
       ErrorHandler.add_error(err.message, {
         method: "canJoinMeeting",
         meetingId,
         userId,
       });
-
-      Logger.writeLog({
-        flag: "CHIME_CAN_JOIN_ERROR",
-        action: "canJoinMeeting",
-        message: err.message,
-        data: { meetingId, userId },
-        critical: true,
-      });
-
-      throw err;
+      throw err; // or return false/null if preferred
     }
   }
 
   static async addAttendee(meetingId, userId, isModerator = false) {
     try {
+      // 1. Validate and sanitize inputs
       const params = SafeUtils.sanitizeValidate({
         meetingId: { value: meetingId, type: "string", required: true },
         userId: { value: userId, type: "string", required: true },
       });
 
+      // 2. Check permission to join
       const allowed = await this.canJoinMeeting(
         params.meetingId,
         params.userId
       );
       if (!allowed) throw new Error("User not allowed to join");
 
+      // 3. Create attendee in Chime
       const resp = await chime.send(
         new CreateAttendeeCommand({
           MeetingId: params.meetingId,
@@ -296,33 +267,19 @@ export default class Chime {
         JoinedAt: new Date().toISOString(),
       };
 
+      // 4. Store in DB
       await ScyllaDb.putItem(ATTENDEES_TABLE, record);
 
+      // 5. Log and return
       logEvent("addAttendee", record);
-
-      Logger.writeLog({
-        flag: "CHIME_ADD_ATTENDEE",
-        action: "addAttendee",
-        message: `User ${params.userId} joined meeting ${params.meetingId}`,
-        data: record,
-      });
-
       return record;
     } catch (err) {
+      // 6. Handle and log errors
       ErrorHandler.add_error(err.message, {
         method: "addAttendee",
         meetingId,
         userId,
       });
-
-      Logger.writeLog({
-        flag: "CHIME_ADD_ATTENDEE_ERROR",
-        action: "addAttendee",
-        message: err.message,
-        data: { meetingId, userId },
-        critical: true,
-      });
-
       logError(err, { method: "addAttendee", meetingId, userId });
       throw err;
     }
@@ -330,11 +287,13 @@ export default class Chime {
 
   static async deleteAttendee(meetingId, attendeeId) {
     try {
+      // 1. Validate and sanitize inputs
       const params = SafeUtils.sanitizeValidate({
         meetingId: { value: meetingId, type: "string", required: true },
         attendeeId: { value: attendeeId, type: "string", required: true },
       });
 
+      // 2. Call Chime to delete attendee
       await chime.send(
         new DeleteAttendeeCommand({
           MeetingId: params.meetingId,
@@ -342,37 +301,24 @@ export default class Chime {
         })
       );
 
+      // 3. Delete from DB
       await ScyllaDb.deleteItem(ATTENDEES_TABLE, {
         MeetingId: params.meetingId,
         AttendeeId: params.attendeeId,
       });
 
+      // 4. Log success
       logEvent("deleteAttendee", {
         meetingId: params.meetingId,
         attendeeId: params.attendeeId,
       });
-
-      Logger.writeLog({
-        flag: "CHIME_DELETE_ATTENDEE",
-        action: "deleteAttendee",
-        message: `Attendee ${params.attendeeId} removed from meeting ${params.meetingId}`,
-        data: { meetingId: params.meetingId, attendeeId: params.attendeeId },
-      });
     } catch (err) {
+      // 5. Handle and log error
       ErrorHandler.add_error(err.message, {
         method: "deleteAttendee",
         meetingId,
         attendeeId,
       });
-
-      Logger.writeLog({
-        flag: "CHIME_DELETE_ATTENDEE_ERROR",
-        action: "deleteAttendee",
-        message: err.message,
-        data: { meetingId, attendeeId },
-        critical: true,
-      });
-
       logError(err, {
         method: "deleteAttendee",
         meetingId,
@@ -384,17 +330,21 @@ export default class Chime {
 
   static async blockAttendee(meetingId, userId) {
     try {
+      // 1. Validate and sanitize inputs
       const params = SafeUtils.sanitizeValidate({
         meetingId: { value: meetingId, type: "string", required: true },
         userId: { value: userId, type: "string", required: true },
       });
 
+      // 2. Get the meeting record
       const meeting = await this.getMeeting(params.meetingId);
       if (!meeting) throw new Error("Meeting not found");
 
+      // 3. Add user to blocked set
       const blocked = new Set(meeting.BlockedAttendeeIds || []);
       blocked.add(params.userId);
 
+      // 4. Update the meeting in DB
       await ScyllaDb.updateItem(
         MEETINGS_TABLE,
         { MeetingId: params.meetingId },
@@ -403,18 +353,13 @@ export default class Chime {
         }
       );
 
+      // 5. Log success
       logEvent("blockAttendee", {
         meetingId: params.meetingId,
         userId: params.userId,
       });
-
-      Logger.writeLog({
-        flag: "CHIME_BLOCK_ATTENDEE",
-        action: "blockAttendee",
-        message: `User ${params.userId} blocked from meeting ${params.meetingId}`,
-        data: { meetingId: params.meetingId, userId: params.userId },
-      });
     } catch (err) {
+      // 6. Handle and log error
       ErrorHandler.add_error(err.message, {
         method: "blockAttendee",
         meetingId,
@@ -424,13 +369,6 @@ export default class Chime {
         method: "blockAttendee",
         meetingId,
         userId,
-      });
-      Logger.writeLog({
-        flag: "CHIME_BLOCK_ERROR",
-        action: "blockAttendee",
-        message: err.message,
-        data: { meetingId, userId },
-        critical: true,
       });
       throw err;
     }
@@ -438,20 +376,24 @@ export default class Chime {
 
   static async userJoinedMeeting(meetingId, attendeeId, userId) {
     try {
+      // 1. Validate and sanitize inputs
       const params = SafeUtils.sanitizeValidate({
         meetingId: { value: meetingId, type: "string", required: true },
         attendeeId: { value: attendeeId, type: "string", required: true },
         userId: { value: userId, type: "string", required: true },
       });
 
+      // 2. Set join time
       const joinedAt = new Date().toISOString();
 
+      // 3. Update attendee record
       await ScyllaDb.updateItem(
         ATTENDEES_TABLE,
         { MeetingId: params.meetingId, AttendeeId: params.attendeeId },
         { JoinedAt: joinedAt }
       );
 
+      // 4. Insert join log
       await ScyllaDb.putItem(JOIN_LOGS_TABLE, {
         UserId: params.userId,
         MeetingId: params.meetingId,
@@ -459,19 +401,14 @@ export default class Chime {
         EventType: "join",
       });
 
+      // 5. Log success
       logEvent("userJoinedMeeting", {
         meetingId: params.meetingId,
         userId: params.userId,
         attendeeId: params.attendeeId,
       });
-
-      Logger.writeLog({
-        flag: "CHIME_JOINED",
-        action: "userJoinedMeeting",
-        message: `User ${params.userId} joined meeting ${params.meetingId}`,
-        data: { meetingId: params.meetingId, userId: params.userId },
-      });
     } catch (err) {
+      // 6. Handle and log error
       ErrorHandler.add_error(err.message, {
         method: "userJoinedMeeting",
         meetingId,
@@ -483,13 +420,6 @@ export default class Chime {
         meetingId,
         userId,
         attendeeId,
-      });
-      Logger.writeLog({
-        flag: "CHIME_JOIN_ERROR",
-        action: "userJoinedMeeting",
-        message: err.message,
-        data: { meetingId, userId, attendeeId },
-        critical: true,
       });
       throw err;
     }
@@ -497,20 +427,24 @@ export default class Chime {
 
   static async userLeftMeeting(meetingId, attendeeId, userId) {
     try {
+      // 1. Validate and sanitize inputs
       const params = SafeUtils.sanitizeValidate({
         meetingId: { value: meetingId, type: "string", required: true },
         attendeeId: { value: attendeeId, type: "string", required: true },
         userId: { value: userId, type: "string", required: true },
       });
 
+      // 2. Set leave time
       const leftAt = new Date().toISOString();
 
+      // 3. Update attendee record
       await ScyllaDb.updateItem(
         ATTENDEES_TABLE,
         { MeetingId: params.meetingId, AttendeeId: params.attendeeId },
         { LeftAt: leftAt }
       );
 
+      // 4. Insert leave log
       await ScyllaDb.putItem(JOIN_LOGS_TABLE, {
         UserId: params.userId,
         MeetingId: params.meetingId,
@@ -518,19 +452,14 @@ export default class Chime {
         EventType: "leave",
       });
 
+      // 5. Log success
       logEvent("userLeftMeeting", {
         meetingId: params.meetingId,
         userId: params.userId,
         attendeeId: params.attendeeId,
       });
-
-      Logger.writeLog({
-        flag: "CHIME_LEFT",
-        action: "userLeftMeeting",
-        message: `User ${params.userId} left meeting ${params.meetingId}`,
-        data: { meetingId: params.meetingId, userId: params.userId },
-      });
     } catch (err) {
+      // 6. Handle and log error
       ErrorHandler.add_error(err.message, {
         method: "userLeftMeeting",
         meetingId,
@@ -542,13 +471,6 @@ export default class Chime {
         meetingId,
         userId,
         attendeeId,
-      });
-      Logger.writeLog({
-        flag: "CHIME_LEAVE_ERROR",
-        action: "userLeftMeeting",
-        message: err.message,
-        data: { meetingId, userId, attendeeId },
-        critical: true,
       });
       throw err;
     }
@@ -563,6 +485,7 @@ export default class Chime {
     rating,
   }) {
     try {
+      // 1. Validate and sanitize inputs
       const params = SafeUtils.sanitizeValidate({
         meetingId: { value: meetingId, type: "string", required: true },
         userId: { value: userId, type: "string", required: true },
@@ -576,6 +499,7 @@ export default class Chime {
         rating: { value: rating, type: "numeric", required: false },
       });
 
+      // 2. Prepare record
       const record = {
         MeetingId: params.meetingId,
         UserId: params.userId,
@@ -586,17 +510,13 @@ export default class Chime {
         Rating: params.rating,
       };
 
+      // 3. Store in DB
       await ScyllaDb.putItem(FEEDBACK_TABLE, record);
 
+      // 4. Log success event
       logEvent("submitFeedback", record);
-
-      Logger.writeLog({
-        flag: "CHIME_FEEDBACK",
-        action: "submitFeedback",
-        message: `Feedback submitted by ${params.userId} for meeting ${params.meetingId}`,
-        data: record,
-      });
     } catch (err) {
+      // 5. Handle and log errors
       ErrorHandler.add_error(err.message, {
         method: "submitFeedback",
         meetingId,
@@ -615,31 +535,19 @@ export default class Chime {
         commentToSession,
         rating,
       });
-      Logger.writeLog({
-        flag: "CHIME_FEEDBACK_ERROR",
-        action: "submitFeedback",
-        message: err.message,
-        data: {
-          meetingId,
-          userId,
-          score,
-          feedback,
-          commentToSession,
-          rating,
-        },
-        critical: true,
-      });
       throw err;
     }
   }
 
   static async updateRevenue(meetingId, revenueEntry) {
     try {
+      // 1. Validate and sanitize inputs
       const params = SafeUtils.sanitizeValidate({
         meetingId: { value: meetingId, type: "string", required: true },
         revenueEntry: { value: revenueEntry, type: "object", required: true },
       });
 
+      // Optional: further validate revenueEntry shape (type, amount, tokens, source)
       if (
         typeof params.revenueEntry.type !== "string" ||
         typeof params.revenueEntry.amount !== "number" ||
@@ -649,10 +557,13 @@ export default class Chime {
         throw new Error("Invalid revenueEntry properties");
       }
 
+      // 2. Fetch existing meeting
       const meeting = await this.getMeeting(params.meetingId);
 
+      // 3. Append new revenue entry
       const updatedRevenue = [...(meeting.Revenue || []), params.revenueEntry];
 
+      // 4. Update DB
       await ScyllaDb.updateItem(
         MEETINGS_TABLE,
         { MeetingId: params.meetingId },
@@ -661,21 +572,13 @@ export default class Chime {
         }
       );
 
+      // 5. Log event
       logEvent("updateRevenue", {
         meetingId: params.meetingId,
         revenueEntry: params.revenueEntry,
       });
-
-      Logger.writeLog({
-        flag: "CHIME_REVENUE",
-        action: "updateRevenue",
-        message: `Revenue updated for meeting ${params.meetingId}`,
-        data: {
-          meetingId: params.meetingId,
-          revenueEntry: params.revenueEntry,
-        },
-      });
     } catch (err) {
+      // 6. Handle and log errors
       ErrorHandler.add_error(err.message, {
         method: "updateRevenue",
         meetingId,
@@ -685,13 +588,6 @@ export default class Chime {
         method: "updateRevenue",
         meetingId,
         revenueEntry,
-      });
-      Logger.writeLog({
-        flag: "CHIME_REVENUE_ERROR",
-        action: "updateRevenue",
-        message: err.message,
-        data: { meetingId, revenueEntry },
-        critical: true,
       });
       throw err;
     }
@@ -699,23 +595,18 @@ export default class Chime {
 
   static async getRecording(meetingId) {
     try {
+      // 1. Validate and sanitize inputs
       const params = SafeUtils.sanitizeValidate({
         meetingId: { value: meetingId, type: "string", required: true },
       });
 
+      // 2. Fetch meeting
       const meeting = await this.getMeeting(params.meetingId);
 
-      const recordingUrl = meeting?.RecordingS3Url || null;
-
-      Logger.writeLog({
-        flag: "CHIME_GET_RECORDING",
-        action: "getRecording",
-        message: `Recording URL retrieved for meeting ${params.meetingId}`,
-        data: { meetingId: params.meetingId, recordingUrl },
-      });
-
-      return recordingUrl;
+      // 3. Return recording URL or null
+      return meeting?.RecordingS3Url || null;
     } catch (err) {
+      // 4. Handle and log errors
       ErrorHandler.add_error(err.message, {
         method: "getRecording",
         meetingId,
@@ -723,13 +614,6 @@ export default class Chime {
       logError(err, {
         method: "getRecording",
         meetingId,
-      });
-      Logger.writeLog({
-        flag: "CHIME_GET_RECORDING_ERROR",
-        action: "getRecording",
-        message: err.message,
-        data: { meetingId },
-        critical: true,
       });
       throw err;
     }
@@ -737,21 +621,18 @@ export default class Chime {
 
   static async hasRecording(meetingId) {
     try {
+      // 1. Validate and sanitize inputs
       const params = SafeUtils.sanitizeValidate({
         meetingId: { value: meetingId, type: "string", required: true },
       });
 
+      // 2. Reuse getRecording to fetch URL
       const url = await this.getRecording(params.meetingId);
 
-      Logger.writeLog({
-        flag: "CHIME_HAS_RECORDING",
-        action: "hasRecording",
-        message: `Recording check completed for meeting ${params.meetingId}`,
-        data: { meetingId: params.meetingId, hasRecording: !!url },
-      });
-
+      // 3. Return boolean if URL exists
       return !!url;
     } catch (err) {
+      // 4. Handle and log errors
       ErrorHandler.add_error(err.message, {
         method: "hasRecording",
         meetingId,
@@ -759,13 +640,6 @@ export default class Chime {
       logError(err, {
         method: "hasRecording",
         meetingId,
-      });
-      Logger.writeLog({
-        flag: "CHIME_HAS_RECORDING_ERROR",
-        action: "hasRecording",
-        message: err.message,
-        data: { meetingId },
-        critical: true,
       });
       throw err;
     }
@@ -773,25 +647,20 @@ export default class Chime {
 
   static async getUserRingtone(userId) {
     try {
+      // 1. Validate and sanitize inputs
       const params = SafeUtils.sanitizeValidate({
         userId: { value: userId, type: "string", required: true },
       });
 
+      // 2. Fetch user data from DB
       const user = await ScyllaDb.getItem(USER_SETTINGS_TABLE, {
         UserId: params.userId,
       });
 
-      const ringtone = user?.Ringtone || "default";
-
-      Logger.writeLog({
-        flag: "CHIME_GET_RINGTONE",
-        action: "getUserRingtone",
-        message: `Ringtone retrieved for user ${params.userId}`,
-        data: { userId: params.userId, ringtone },
-      });
-
-      return ringtone;
+      // 3. Return ringtone or default
+      return user?.Ringtone || "default";
     } catch (err) {
+      // 4. Handle and log errors
       ErrorHandler.add_error(err.message, {
         method: "getUserRingtone",
         userId,
@@ -799,13 +668,6 @@ export default class Chime {
       logError(err, {
         method: "getUserRingtone",
         userId,
-      });
-      Logger.writeLog({
-        flag: "CHIME_GET_RINGTONE_ERROR",
-        action: "getUserRingtone",
-        message: err.message,
-        data: { userId },
-        critical: true,
       });
       throw err;
     }
@@ -813,25 +675,20 @@ export default class Chime {
 
   static async getUserMeetingAvatar(userId) {
     try {
+      // 1. Validate and sanitize inputs
       const params = SafeUtils.sanitizeValidate({
         userId: { value: userId, type: "string", required: true },
       });
 
+      // 2. Fetch user data from DB
       const user = await ScyllaDb.getItem(USER_SETTINGS_TABLE, {
         UserId: params.userId,
       });
 
-      const avatarUrl = user?.AvatarUrl || null;
-
-      Logger.writeLog({
-        flag: "CHIME_GET_AVATAR",
-        action: "getUserMeetingAvatar",
-        message: `Avatar URL retrieved for user ${params.userId}`,
-        data: { userId: params.userId, avatarUrl },
-      });
-
-      return avatarUrl;
+      // 3. Return avatar URL or null
+      return user?.AvatarUrl || null;
     } catch (err) {
+      // 4. Handle and log errors
       ErrorHandler.add_error(err.message, {
         method: "getUserMeetingAvatar",
         userId,
@@ -840,32 +697,16 @@ export default class Chime {
         method: "getUserMeetingAvatar",
         userId,
       });
-      Logger.writeLog({
-        flag: "CHIME_GET_AVATAR_ERROR",
-        action: "getUserMeetingAvatar",
-        message: err.message,
-        data: { userId },
-        critical: true,
-      });
       throw err;
     }
   }
 
   static async getDefaultAvatars() {
-    const avatars = [
+    return [
       "https://cdn.example.com/avatars/1.png",
       "https://cdn.example.com/avatars/2.png",
       "https://cdn.example.com/avatars/3.png",
     ];
-
-    Logger.writeLog({
-      flag: "CHIME_GET_DEFAULT_AVATARS",
-      action: "getDefaultAvatars",
-      message: "Default avatars fetched successfully",
-      data: { count: avatars.length },
-    });
-
-    return avatars;
   }
 
   static async notifyMeetingStarted(meetingId) {

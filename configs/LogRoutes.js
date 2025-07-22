@@ -1,4 +1,5 @@
-module.exports = {
+// logRoutes.mjs or logRoutes.js (if "type": "module" in package.json)
+const logRoutes = {
   system: {
     retention: "180d",
     category: "system",
@@ -110,3 +111,5 @@ module.exports = {
     ],
   },
 };
+
+export default logRoutes;

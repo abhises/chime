@@ -1,16 +1,16 @@
-const dotenv = require("dotenv");
-const ScyllaDb = require("../ScyllaDb");
-const IVSService = require("../ivs/ivs");
-const getIvsClient = require("../ivs/ivsClient");
-const logEvent = require("../utils/logEvent");
-const ErrorHandler = require("../utils/ErrorHandler");
+import dotenv from "dotenv";
+import ScyllaDb from "../ScyllaDb.js";
+import IVSService from "../ivs/ivs.js";
+import getIvsClient from "../ivs/ivsClient.js";
+import logEvent from "../utils/logEvent.js";
+import ErrorHandler from "../utils/ErrorHandler.js";
 
-const {
+import {
   CreateChannelCommand,
   CreateStreamKeyCommand,
   DeleteStreamKeyCommand,
   ListStreamKeysCommand,
-} = require("@aws-sdk/client-ivs");
+} from "@aws-sdk/client-ivs";
 
 dotenv.config();
 

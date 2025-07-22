@@ -1,4 +1,4 @@
-class SafeUtils {
+export default class SafeUtils {
   /**
    * Check whether a value should be considered “present”.
    * Mirrors behaviour of PHP::has_value():
@@ -671,5 +671,3 @@ class SafeUtils {
     return document.body.innerHTML;
   }
 }
-
-module.exports = SafeUtils;

@@ -1,9 +1,11 @@
-const Chime = require("../chime/Chime");
-const ScyllaDb = require("../ScyllaDb");
-const dotenv = require("dotenv");
-const ErrorHandler = require("../utils/ErrorHandler");
+// chimeTestRunner.mjs
+import dotenv from "dotenv";
+import Chime from "../chime/Chime.js";
+import ScyllaDb from "../ScyllaDb.js";
+import ErrorHandler from "../utils/ErrorHandler.js";
 
 dotenv.config();
+
 // Test utilities
 function logTest(testName) {
   console.log(`\n🧪 Testing ${testName}...`);

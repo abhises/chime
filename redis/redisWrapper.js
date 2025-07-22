@@ -1,4 +1,5 @@
-createClient = require("redis");
+// redisWrapper.mjs
+import { createClient } from "redis";
 
 class RedisWrapper {
   constructor() {
@@ -105,4 +106,4 @@ class RedisWrapper {
 
 // Create singleton instance
 const redisWrapper = new RedisWrapper();
-module.exports = redisWrapper;
+export default redisWrapper;

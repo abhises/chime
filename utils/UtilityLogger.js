@@ -1,8 +1,12 @@
-const logConfig = require("../configs/LogRoutes");
-const fs = require("fs");
-const path = require("path");
-require("dotenv").config(); // ✅ Load environment variables first
-const moment = require("moment");
+// logger.mjs
+import fs from "fs";
+import path from "path";
+import moment from "moment";
+import dotenv from "dotenv";
+import logConfig from "../configs/LogRoutes.js";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+
+dotenv.config(); // Load environment variables
 
 const localLogRoute = path.join(process.cwd(), "logs");
 const isLocal = process.env.NODE_ENV === "local";
@@ -35,8 +39,6 @@ class Logger {
       PCI_compliance: false,
       critical: true,
     };
-
-    // throw new Error(`Log route for flag "${flag}" not found.`);
   }
 
   static writeLog({ flag, data = {}, action, critical = false, message = "" }) {
@@ -64,7 +66,6 @@ class Logger {
 
     const logPath = Logger.resolvePath(route.path, data);
 
-    // 🛑 If path resolution fails, log the error as a separate fallback entry
     if (!logPath) {
       Logger.writeToLocal(
         `fallback/system_error/missing_path_${flag}_${Date.now()}.log`,
@@ -115,7 +116,7 @@ class Logger {
         console.error(
           `[Logger] ❌ Missing key "${key}" for template "${template}"`
         );
-        return null; // Let writeLog handle fallback
+        return null;
       }
 
       let replacement = data[key];
@@ -128,11 +129,9 @@ class Logger {
             `${String(date.getMonth() + 1).padStart(2, "0")}-` +
             `${date.getFullYear()}`;
           break;
-
         case "UID":
           replacement = String(replacement);
           break;
-
         default:
           replacement = String(replacement);
           break;
@@ -157,35 +156,36 @@ class Logger {
     fs.appendFileSync(fullPath, JSON.stringify(logEntry) + "\n");
   }
 
-  static writeToS3(relativePath, logEntry) {
-    // Lazy load AWS SDK only when needed
-    const AWS = require("aws-sdk");
+  static async writeToS3(relativePath, logEntry) {
+    // Avoid S3 writes in local/test mode
+    const env = process.env.NODE_ENV;
+    if (env === "local" || env === "test") {
+      console.log(`[Logger] Skipped S3 write in "${env}" environment`);
+      return;
+    }
 
-    const S3_BUCKET = process.env.S3_BUCKET || "";
-    const S3_ROOT_PREFIX = process.env.S3_ROOT_PREFIX || "logs/";
+    try {
+      const S3_BUCKET = process.env.S3_BUCKET || "";
+      const S3_ROOT_PREFIX = process.env.S3_ROOT_PREFIX || "logs/";
+      const s3Key = path.posix.join(S3_ROOT_PREFIX, relativePath);
+      const Body = JSON.stringify(logEntry) + "\n";
 
-    const s3 = new AWS.S3();
+      const client = new S3Client({ region: process.env.AWS_REGION });
 
-    const s3Key = path.posix.join(S3_ROOT_PREFIX, relativePath);
-    const Body = JSON.stringify(logEntry) + "\n";
-
-    const params = {
-      Bucket: S3_BUCKET,
-      Key: s3Key,
-      Body,
-    };
-
-    s3.putObject(params)
-      .promise()
-      .catch((err) => {
-        console.error(`[Logger] Failed to write log to S3: ${err.message}`);
+      const command = new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: s3Key,
+        Body,
       });
-  }
 
+      await client.send(command);
+    } catch (err) {
+      console.error(`[Logger] Failed to write log to S3: ${err.message}`);
+    }
+  }
   static notifySlack(logEntry) {
-    // Placeholder: implement your Slack notifier
     console.log(`[Logger] 🔔 Critical log posted to Slack:`, logEntry);
   }
 }
 
-module.exports = Logger;
+export default Logger;
