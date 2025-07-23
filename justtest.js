@@ -57,28 +57,22 @@ async function runAllTests() {
 
 async function testCreateMeeting() {
   ErrorHandler.clear(); // Start with a clean error list
-  logTest("createMeeting");
-  console.log("Current AWS Region:", process.env.AWS_REGION);
+  // logTest("createMeeting");
+  // console.log("Current AWS Region:", process.env.AWS_REGION);
 
+  logTest("Leave unknown attendee rejected");
   try {
-    const meeting = await Chime.createMeeting({
-      title: "Block Then Join",
-      creatorUserId: "hostBlock2",
+    await Chime.submitFeedback({
+      meetingId: "non-existent-meeting",
+      userId: "userFail",
+      score: 4,
+      feedback: "Okay",
+      commentToSession: "",
+      rating: 4,
     });
-    console.log("meeting", meeting);
-    const blockeduser = await Chime.blockAttendee(
-      meeting.MeetingId,
-      "blockedUser"
-    );
-    console.log("blocked user", blockeduser);
-    const tryjoinBlockuser = await Chime.canJoinMeeting(
-      meeting.MeetingId,
-      "blockedUser"
-    );
-    console.log("tryjoinBlockuser", tryjoinBlockuser);
-    // console.log("❌ Blocked user joined anyway");
+    console.log("❌ Feedback on invalid meeting accepted");
   } catch (e) {
-    logTest("✅ Blocked user prevented: " + e.message);
+    logTest("✅ Rejected invalid meeting: " + e.message);
   }
   console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
 }

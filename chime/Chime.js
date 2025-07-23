@@ -217,6 +217,7 @@ export default class Chime {
 
       const meeting = await this.getMeeting(params.meetingId);
       if (!meeting) throw new Error("Meeting does not exist");
+      console.log("meeting inside the canjoinMeeting", meeting);
 
       if (
         Array.isArray(meeting.BlockedAttendeeIds) &&
@@ -238,16 +239,16 @@ export default class Chime {
         throw new Error("User already joined");
       }
 
-      const allowed = attendees.length < MAX_ATTENDEES;
+      // const allowed = attendees.length < MAX_ATTENDEES;
 
       Logger.writeLog({
         flag: "CHIME_CAN_JOIN_MEETING",
         action: "canJoinMeeting",
         message: `Checked join permission for user ${params.userId}`,
-        data: { meetingId: params.meetingId, allowed },
+        data: { meetingId: params.meetingId },
       });
 
-      return allowed;
+      return attendees.length < MAX_ATTENDEES;
     } catch (err) {
       ErrorHandler.add_error(err.message, {
         method: "canJoinMeeting",
@@ -414,7 +415,8 @@ export default class Chime {
       const blocked = new Set(meeting.BlockedAttendeeIds || []);
       blocked.add(params.userId);
 
-      await ScyllaDb.updateItem(
+      // Perform update
+      const updated = await ScyllaDb.updateItem(
         MEETINGS_TABLE,
         { MeetingId: params.meetingId },
         {
@@ -422,28 +424,36 @@ export default class Chime {
         }
       );
 
+      // Emit internal event
       logEvent("blockAttendee", {
         meetingId: params.meetingId,
         userId: params.userId,
       });
 
+      // Logger
       Logger.writeLog({
         flag: "CHIME_BLOCK_ATTENDEE",
         action: "blockAttendee",
         message: `User ${params.userId} blocked from meeting ${params.meetingId}`,
         data: { meetingId: params.meetingId, userId: params.userId },
       });
+
+      // ✅ Return the fresh, full meeting record
+
+      return updated;
     } catch (err) {
       ErrorHandler.add_error(err.message, {
         method: "blockAttendee",
         meetingId,
         userId,
       });
+
       logError(err, {
         method: "blockAttendee",
         meetingId,
         userId,
       });
+
       Logger.writeLog({
         flag: "CHIME_BLOCK_ERROR",
         action: "blockAttendee",
@@ -451,6 +461,7 @@ export default class Chime {
         data: { meetingId, userId },
         critical: true,
       });
+
       throw err;
     }
   }
@@ -462,6 +473,15 @@ export default class Chime {
         attendeeId: { value: attendeeId, type: "string", required: true },
         userId: { value: userId, type: "string", required: true },
       });
+
+      const attendee = await ScyllaDb.getItem(ATTENDEES_TABLE, {
+        MeetingId: params.meetingId,
+        AttendeeId: params.attendeeId,
+      });
+      console.log("attendee attendee", attendee);
+      if (!attendee || Object.keys(attendee).length === 0) {
+        throw new Error("Attendee not found");
+      }
 
       const joinedAt = new Date().toISOString();
 
@@ -521,6 +541,15 @@ export default class Chime {
         attendeeId: { value: attendeeId, type: "string", required: true },
         userId: { value: userId, type: "string", required: true },
       });
+
+      const attendee = await ScyllaDb.getItem(ATTENDEES_TABLE, {
+        MeetingId: params.meetingId,
+        AttendeeId: params.attendeeId,
+      });
+      console.log("attendee attendee", attendee);
+      if (!attendee || Object.keys(attendee).length === 0) {
+        throw new Error("Attendee not found");
+      }
 
       const leftAt = new Date().toISOString();
 
@@ -595,6 +624,12 @@ export default class Chime {
         rating: { value: rating, type: "numeric", required: false },
       });
 
+      // ✅ Ensure the meeting exists
+      const meeting = await this.getMeeting(params.meetingId);
+      if (!meeting) {
+        throw new Error("meetingId not found");
+      }
+
       const record = {
         MeetingId: params.meetingId,
         UserId: params.userId,
@@ -667,9 +702,11 @@ export default class Chime {
       ) {
         throw new Error("Invalid revenueEntry properties");
       }
-
       const meeting = await this.getMeeting(params.meetingId);
 
+      if (!meeting || typeof meeting !== "object" || !meeting.MeetingId) {
+        throw new Error("meetingId not found");
+      }
       const updatedRevenue = [...(meeting.Revenue || []), params.revenueEntry];
 
       await ScyllaDb.updateItem(
@@ -724,6 +761,10 @@ export default class Chime {
 
       const meeting = await this.getMeeting(params.meetingId);
 
+      if (!meeting || typeof meeting !== "object" || !meeting.MeetingId) {
+        throw new Error("meetingId not found");
+      }
+
       const recordingUrl = meeting?.RecordingS3Url || null;
 
       Logger.writeLog({
@@ -759,7 +800,11 @@ export default class Chime {
       const params = SafeUtils.sanitizeValidate({
         meetingId: { value: meetingId, type: "string", required: true },
       });
+      const meeting = await this.getMeeting(params.meetingId);
 
+      if (!meeting || typeof meeting !== "object" || !meeting.MeetingId) {
+        throw new Error("meetingId not found");
+      }
       const url = await this.getRecording(params.meetingId);
 
       Logger.writeLog({
