@@ -269,17 +269,24 @@ export default class Chime {
 
   static async addAttendee(meetingId, userId, isModerator = false) {
     try {
+      // Validate required parameters
       const params = SafeUtils.sanitizeValidate({
         meetingId: { value: meetingId, type: "string", required: true },
         userId: { value: userId, type: "string", required: true },
       });
 
+      // Authorization check
       const allowed = await this.canJoinMeeting(
         params.meetingId,
         params.userId
       );
-      if (!allowed) throw new Error("User not allowed to join");
+      if (!allowed) {
+        throw new Error(
+          `User ${params.userId} not allowed to join meeting ${params.meetingId}`
+        );
+      }
 
+      // Create attendee via AWS Chime
       const resp = await chime.send(
         new CreateAttendeeCommand({
           MeetingId: params.meetingId,
@@ -296,10 +303,16 @@ export default class Chime {
         JoinedAt: new Date().toISOString(),
       };
 
+      // ✅ Add timestamp key to match logger template
+      record.timestamp = record.JoinedAt;
+
+      // Persist to DB
       await ScyllaDb.putItem(ATTENDEES_TABLE, record);
 
+      // Emit custom event log
       logEvent("addAttendee", record);
 
+      // Logger: success case
       Logger.writeLog({
         flag: "CHIME_ADD_ATTENDEE",
         action: "addAttendee",
@@ -309,21 +322,27 @@ export default class Chime {
 
       return record;
     } catch (err) {
-      ErrorHandler.add_error(err.message, {
+      const context = {
         method: "addAttendee",
         meetingId,
         userId,
-      });
+      };
 
+      // Custom error handler
+      ErrorHandler.add_error(err.message, context);
+
+      // Logger: error case
       Logger.writeLog({
         flag: "CHIME_ADD_ATTENDEE_ERROR",
         action: "addAttendee",
         message: err.message,
-        data: { meetingId, userId },
+        data: { ...context, stack: err.stack },
         critical: true,
       });
 
-      logError(err, { method: "addAttendee", meetingId, userId });
+      // Local error logging
+      logError(err, context);
+
       throw err;
     }
   }

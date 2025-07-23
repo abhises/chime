@@ -110,6 +110,25 @@ const logRoutes = {
       },
     ],
   },
+  chime: {
+    category: "chime",
+    description: "AWS Chime attendee logs",
+    retention: "30d",
+    logs: [
+      {
+        flag: "CHIME_ADD_ATTENDEE",
+        path: "chime/attendees/{meetingId:UID}/{timestamp:DD-MM-YYYY}.log",
+        PCI_compliance: false,
+        critical: false,
+      },
+      {
+        flag: "CHIME_ADD_ATTENDEE_ERROR",
+        path: "chime/errors/addAttendee/{meetingId:UID}/{timestamp:DD-MM-YYYY}.log",
+        PCI_compliance: false,
+        critical: true,
+      },
+    ],
+  },
 };
 
 export default logRoutes;

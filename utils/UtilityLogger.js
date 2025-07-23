@@ -101,7 +101,6 @@ class Logger {
       Logger.writeLog(log);
     }
   }
-
   static resolvePath(template, data) {
     let logPath = template;
 
@@ -112,14 +111,22 @@ class Logger {
     for (const placeholder of placeholders) {
       const [key, format] = placeholder.split(":").map((s) => s.trim());
 
-      if (!(key in data)) {
+      // ❗ Patch: fallback to capitalized key if lowercase missing
+      const actualKey =
+        key in data
+          ? key
+          : Object.keys(data).find(
+              (k) => k.toLowerCase() === key.toLowerCase()
+            );
+
+      if (!actualKey || !(actualKey in data)) {
         console.error(
           `[Logger] ❌ Missing key "${key}" for template "${template}"`
         );
         return null;
       }
 
-      let replacement = data[key];
+      let replacement = data[actualKey];
 
       switch (format) {
         case "DD-MM-YYYY":
@@ -130,8 +137,6 @@ class Logger {
             `${date.getFullYear()}`;
           break;
         case "UID":
-          replacement = String(replacement);
-          break;
         default:
           replacement = String(replacement);
           break;

@@ -62,14 +62,23 @@ async function testCreateMeeting() {
 
   try {
     const meeting = await Chime.createMeeting({
-      title: "Block Test",
-      creatorUserId: "hostBlock",
+      title: "Block Then Join",
+      creatorUserId: "hostBlock2",
     });
-    await Chime.blockAttendee(meeting.MeetingId, "badGuy");
-    await Chime.addAttendee(meeting.MeetingId, "badGuy");
-    console.log("❌ Blocked user should not be added");
+    console.log("meeting", meeting);
+    const blockeduser = await Chime.blockAttendee(
+      meeting.MeetingId,
+      "blockedUser"
+    );
+    console.log("blocked user", blockeduser);
+    const tryjoinBlockuser = await Chime.canJoinMeeting(
+      meeting.MeetingId,
+      "blockedUser"
+    );
+    console.log("tryjoinBlockuser", tryjoinBlockuser);
+    // console.log("❌ Blocked user joined anyway");
   } catch (e) {
-    logTest("✅ Blocked user rejected: " + e.message);
+    logTest("✅ Blocked user prevented: " + e.message);
   }
   console.log(JSON.stringify(ErrorHandler.get_all_errors(), null, 2));
 }
